@@ -104,47 +104,65 @@ namespace Couplers {
         const size_t N = std::min({ cB.lambda_nm.size(), cG.lambda_nm.size(), cR.lambda_nm.size() });
         if (N == 0) return;
 
+        // Early-out: exact zero DIR matrix must be identity (fixes ZeroMatrix test)
+        bool zeroM = true;
+        for (int r = 0; r < 3 && zeroM; ++r)
+            for (int c = 0; c < 3; ++c)
+                if (M[r][c] != 0.0f) { zeroM = false; break; }
+        if (zeroM) return;
+
         // Per-channel grids and densities
         std::vector<float> xB(N), xG(N), xR(N);
         std::vector<float> dY(N), dM(N), dC(N);
         for (size_t i = 0; i < N; ++i) {
-            xB[i] = cB.lambda_nm[i];
-            xG[i] = cG.lambda_nm[i];
-            xR[i] = cR.lambda_nm[i];
-            dY[i] = cB.linear[i];
-            dM[i] = cG.linear[i];
-            dC[i] = cR.linear[i];
+            xB[i] = cB.lambda_nm[i]; dY[i] = cB.linear[i];
+            xG[i] = cG.lambda_nm[i]; dM[i] = cG.linear[i];
+            xR[i] = cR.lambda_nm[i]; dC[i] = cR.linear[i];
         }
 
         // Monotonicity guard
         auto is_monotonic = [](const std::vector<float>& X)->bool {
             if (X.empty() || !std::isfinite(X.front()) || !std::isfinite(X.back())) return false;
             for (size_t i = 1; i < X.size(); ++i) {
-                if (!std::isfinite(X[i]) || !(X[i] >= X[i - 1])) return false;
+                if (!std::isfinite(X[i]) || X[i] < X[i - 1]) return false;
             }
             return true;
             };
-        if (!(is_monotonic(xB) && is_monotonic(xG) && is_monotonic(xR))) {
-            return; // leave curves untouched
-        }
+        if (!(is_monotonic(xB) && is_monotonic(xG) && is_monotonic(xR))) return;
 
-        // Normalize per-channel, with high exposure quadratic term
-        auto vmax = [](const std::vector<float>& v) {
-            float m = 0.0f; for (float t : v) m = std::max(m, t); return (m > 0.0f) ? m : 1.0f;
+        // Safe normalization + high-exposure quadratic boost
+        auto vmax = [](const std::vector<float>& v)->float {
+            float m = 0.0f; for (float t : v) if (std::isfinite(t)) m = std::max(m, t);
+            return (m > 0.0f) ? m : 1.0f;
             };
         const float dYmax = vmax(dY), dMmax = vmax(dM), dCmax = vmax(dC);
 
+        auto safe_div01 = [](float v, float m)->float {
+            float mm = (std::isfinite(m) && m > 1e-6f) ? m : 1.0f;
+            float r = v / mm;
+            if (!std::isfinite(r)) r = 0.0f;
+            if (r < 0.0f) r = 0.0f; else if (r > 1.0f) r = 1.0f;
+            return r;
+            };
+        auto boost = [highExpShift](float t)->float {
+            // why: match agx-emulsion behavior but guard non-finite
+            t = (std::isfinite(t) ? std::clamp(t, 0.0f, 1.0f) : 0.0f);
+            float tb = t + highExpShift * t * t;
+            if (!std::isfinite(tb)) tb = t;
+            return std::clamp(tb, 0.0f, 1.0f);
+            };
+
         std::vector<float> nB(N), nG(N), nR(N);
         for (size_t i = 0; i < N; ++i) {
-            const float y = dY[i] / dYmax;
-            const float m = dM[i] / dMmax;
-            const float c = dC[i] / dCmax;
-            nB[i] = y + highExpShift * y * y;
-            nG[i] = m + highExpShift * m * m;
-            nR[i] = c + highExpShift * c * c;
+            const float y = safe_div01(dY[i], dYmax);
+            const float m = safe_div01(dM[i], dMmax);
+            const float c = safe_div01(dC[i], dCmax);
+            nB[i] = boost(y);
+            nG[i] = boost(m);
+            nR[i] = boost(c);
         }
 
-        // Clamp warp to local domain
+        // Inclusive clamp (no inward bias)
         auto clamp_warp = [](float xq, float xmin, float xmax)->float {
             if (!std::isfinite(xq)) return xmin;
             return std::min(std::max(xq, xmin), xmax);
@@ -154,12 +172,11 @@ namespace Couplers {
         auto interp = [](const std::vector<float>& X, const std::vector<float>& Y, float xq)->float {
             if (X.empty() || Y.empty()) return 0.0f;
             const float xmin = X.front(), xmax = X.back();
-            if (!std::isfinite(xq)) return (!Y.empty() ? Y.front() : 0.0f);
-            if (!std::isfinite(xmin) || !std::isfinite(xmax)) return (!Y.empty() ? Y.front() : 0.0f);
+            if (!std::isfinite(xq)) return Y.front();
+            if (!std::isfinite(xmin) || !std::isfinite(xmax)) return Y.front();
             if (xq <= xmin) return Y.front();
             if (xq >= xmax) return Y.back();
 
-            // lower_bound assumes ascending; NaN in X breaks ordering. Guard by scanning a small window.
             size_t i1 = size_t(std::lower_bound(X.begin(), X.end(), xq) - X.begin());
             if (i1 == 0) return Y.front();
             if (i1 >= X.size()) return Y.back();
@@ -167,18 +184,14 @@ namespace Couplers {
 
             const float x0 = X[i0], x1 = X[i1];
             const float y0 = Y[i0], y1 = Y[i1];
-
-            // If any involved value is non-finite, fall back to y0
             if (!std::isfinite(x0) || !std::isfinite(x1) || !std::isfinite(y0) || !std::isfinite(y1)) {
                 return std::isfinite(y0) ? y0 : 0.0f;
             }
-
             const float denom = (x1 - x0);
-            if (denom <= 0.0f || !std::isfinite(denom)) return y0;
+            if (!(denom > 0.0f) || !std::isfinite(denom)) return y0;
             const float t = (xq - x0) / denom;
             return y0 + t * (y1 - y0);
             };
-
 
         // Apply per-sample ΔlogE on each channel’s own grid
         std::vector<float> dYcorr(N), dMcorr(N), dCcorr(N);
@@ -211,163 +224,150 @@ namespace Couplers {
         Spectral::Curve& outB, Spectral::Curve& outG, Spectral::Curve& outR)
     {
         using Spectral::Curve;
-        outB = inB; outG = inG; outR = inR;
+
+        // Copy-through by default
+        outB = inB;
+        outG = inG;
+        outR = inR;
 
         const size_t N = std::min({ inB.lambda_nm.size(), inG.lambda_nm.size(), inR.lambda_nm.size() });
         if (N == 0) return;
 
-        // Per‑channel grids and densities
+        // Identity early-out if DIR matrix is exactly zero (agx parity; fixes ZeroMatrix test)
+        bool zeroM = true;
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                if (M[r][c] != 0.0f) { zeroM = false; break; }
+        if (zeroM) return;
+
+        // Original grids + densities
         std::vector<float> xB(N), xG(N), xR(N);
         std::vector<float> dY(N), dM(N), dC(N);
         for (size_t i = 0; i < N; ++i) {
-            xB[i] = inB.lambda_nm[i];
-            xG[i] = inG.lambda_nm[i];
-            xR[i] = inR.lambda_nm[i];
-            dY[i] = inB.linear[i];
-            dM[i] = inG.linear[i];
-            dC[i] = inR.linear[i];
+            xB[i] = inB.lambda_nm[i]; dY[i] = inB.linear[i];
+            xG[i] = inG.lambda_nm[i]; dM[i] = inG.linear[i];
+            xR[i] = inR.lambda_nm[i]; dC[i] = inR.linear[i];
         }
 
-        // Monotonicity guard
-        auto is_monotonic = [](const std::vector<float>& X)->bool {
+        // Keep immutable query copies to prevent OOB after dedup (fixes crash)
+        const std::vector<float> qB = xB, qG = xG, qR = xR;
+
+        // Monotonicity guard (non-decreasing)
+        auto mono = [](const std::vector<float>& X)->bool {
             if (X.empty() || !std::isfinite(X.front()) || !std::isfinite(X.back())) return false;
             for (size_t i = 1; i < X.size(); ++i) {
-                if (!std::isfinite(X[i]) || !(X[i] >= X[i - 1])) return false;
+                if (!std::isfinite(X[i]) || X[i] < X[i - 1]) return false;
             }
             return true;
             };
-        const bool okB = is_monotonic(xB);
-        const bool okG = is_monotonic(xG);
-        const bool okR = is_monotonic(xR);
-        if (!(okB && okG && okR)) {
-            outB = inB; outG = inG; outR = inR;
-            return;
-        }
+        if (!(mono(qB) && mono(qG) && mono(qR))) return; // leave untouched
 
-        // Normalize per-channel, with high exposure quadratic term
-        auto vmax = [](const std::vector<float>& v) {
-            float m = 0.0f; for (float t : v) m = std::max(m, t); return (m > 0.0f) ? m : 1.0f;
+        // Normalize per-channel with optional high exposure quadratic boost
+        auto vmax = [](const std::vector<float>& v)->float {
+            float m = 0.0f; for (float t : v) if (std::isfinite(t)) m = std::max(m, t);
+            return (m > 0.0f) ? m : 1.0f;
             };
-        const float dYmax = vmax(dY), dMmax = vmax(dM), dCmax = vmax(dC);
+        const float yMax = vmax(dY), mMax = vmax(dM), cMax = vmax(dC);
+        auto safe_div = [](float a, float b)->float {
+            if (!std::isfinite(a)) a = 0.0f;
+            if (!(b > 1e-4f) || !std::isfinite(b)) b = 1.0f;
+            return a / b;
+            };
+        auto boost = [highExpShift](float t)->float {
+            // keep non-negative; agx-style quadratic shift
+            t = std::clamp(t, 0.0f, 1.0f);
+            return t + highExpShift * t * t;
+            };
 
         std::vector<float> nB(N), nG(N), nR(N);
-        auto safe_div = [](float v, float m)->float {
-            float mm = (std::isfinite(m) && m > 1e-6f) ? m : 1.0f;
-            float r = v / mm;
-            if (!std::isfinite(r)) r = 0.0f;
-            return std::min(std::max(r, 0.0f), 1.0f);
-            };
-
         for (size_t i = 0; i < N; ++i) {
-            const float y = safe_div(dY[i], dYmax);
-            const float m = safe_div(dM[i], dMmax);
-            const float c = safe_div(dC[i], dCmax);
-            auto boost = [&](float t)->float {
-                float tb = t + highExpShift * t * t; // agx quadratic boost
-                if (!std::isfinite(tb)) tb = t;
-                return std::min(std::max(tb, 0.0f), 1.0f);
-                };
-            nB[i] = boost(y);
-            nG[i] = boost(m);
-            nR[i] = boost(c);
+            nB[i] = boost(safe_div(dY[i], yMax));
+            nG[i] = boost(safe_div(dM[i], mMax));
+            nR[i] = boost(safe_div(dC[i], cMax));
         }
 
-        // Dedup each channel grid against its own density vector (once, not in the per-sample loop)
-        auto dedup_strict = [](std::vector<float>& X, std::vector<float>& Y) {
-            if (X.size() != Y.size() || X.empty()) return;
-            std::vector<float> X2; X2.reserve(X.size());
-            std::vector<float> Y2; Y2.reserve(Y.size());
-            float lastX = X[0];
-            float lastY = Y[0];
-            X2.push_back(lastX);
-            Y2.push_back(std::isfinite(lastY) ? std::max(0.0f, lastY) : 0.0f);
-            for (size_t i = 1; i < X.size(); ++i) {
-                float xi = X[i];
-                float yi = std::isfinite(Y[i]) ? std::max(0.0f, Y[i]) : 0.0f;
+        // Dedup STRICT on interpolation data ONLY (not on the query grids)
+        auto dedup_strict = [](const std::vector<float>& X, const std::vector<float>& Y,
+            std::vector<float>& Xo, std::vector<float>& Yo) {
+                Xo.clear(); Yo.clear();
+                if (X.size() != Y.size() || X.empty()) return;
+                Xo.reserve(X.size()); Yo.reserve(Y.size());
+                float lastX = X[0];
+                float lastY = std::isfinite(Y[0]) ? std::max(0.0f, Y[0]) : 0.0f;
+                Xo.push_back(lastX); Yo.push_back(lastY);
                 const float eps = 1e-6f;
-                if (!std::isfinite(xi)) continue;
-                if (xi <= lastX + eps) {
-                    X2.back() = lastX;
-                    Y2.back() = std::max(Y2.back(), yi);
-                    continue;
+                for (size_t i = 1; i < X.size(); ++i) {
+                    float xi = X[i];
+                    float yi = std::isfinite(Y[i]) ? std::max(0.0f, Y[i]) : 0.0f;
+                    if (xi <= lastX + eps) {
+                        // merge duplicates by keeping max density (monotone)
+                        Yo.back() = std::max(Yo.back(), yi);
+                    }
+                    else {
+                        Xo.push_back(xi);
+                        Yo.push_back(yi);
+                        lastX = xi;
+                    }
                 }
-                X2.push_back(xi);
-                Y2.push_back(yi);
-                lastX = xi;
-            }
-            if (X2.size() >= 2) {
-                X = std::move(X2);
-                Y = std::move(Y2);
-            }
             };
-        dedup_strict(xB, dY);
-        dedup_strict(xG, dM);
-        dedup_strict(xR, dC);
 
-        // Clamp warp to local domain with conservative bounds and max absolute warp per sample.
-        // This prevents endpoint accumulation across repeated pre-warp passes when the host
-        // triggers multiple rebuilds in a short time.
+        std::vector<float> XB, YB, XG, YG, XR, YR;
+        dedup_strict(xB, dY, XB, YB);
+        dedup_strict(xG, dM, XG, YG);
+        dedup_strict(xR, dC, XR, YR);
+        if (XB.size() < 2 || XG.size() < 2 || XR.size() < 2) return; // nothing reliable to do
+
+        // Inclusive clamp (NO inward bias; agx parity; fixes identity expectations)
         auto clamp_warp = [](float xq, float xmin, float xmax)->float {
             if (!std::isfinite(xq)) return xmin;
-            const float eps = 5e-5f; // slightly stronger inward bias
-            const float lo = xmin + eps;
-            const float hi = xmax - eps;
-            float xc = std::min(std::max(xq, lo), hi);
-            if (!std::isfinite(xc)) xc = lo;
-            return xc;
+            return std::min(std::max(xq, xmin), xmax);
             };
 
-        // Local interpolator
+        // Interpolator on dedup'ed data
         auto interp = [](const std::vector<float>& X, const std::vector<float>& Y, float xq)->float {
-            if (!std::isfinite(xq)) return Y.front();
-            if (xq <= X.front()) return Y.front();
-            if (xq >= X.back())  return Y.back();
+            const size_t N = X.size();
+            if (N == 0 || Y.size() != N) return 0.0f;
+            const float xmin = X.front(), xmax = X.back();
+            if (!std::isfinite(xq)) xq = xmin;
+            if (xq <= xmin) return Y.front();
+            if (xq >= xmax) return Y.back();
             size_t i1 = size_t(std::lower_bound(X.begin(), X.end(), xq) - X.begin());
             if (i1 == 0) return Y.front();
-            if (i1 >= X.size()) return Y.back();
+            if (i1 >= N) return Y.back();
             size_t i0 = i1 - 1;
-            const float denom = (X[i1] - X[i0]);
-            if (denom <= 0.0f || !std::isfinite(denom)) return Y[i0];
-            const float t = (xq - X[i0]) / denom;
-            return Y[i0] + t * (Y[i1] - Y[i0]);
+            float x0 = X[i0], x1 = X[i1];
+            float y0 = Y[i0], y1 = Y[i1];
+            if (!std::isfinite(x0) || !std::isfinite(x1) || !std::isfinite(y0) || !std::isfinite(y1)) {
+                return std::isfinite(y0) ? y0 : 0.0f;
+            }
+            const float denom = (x1 - x0);
+            if (!(denom > 0.0f) || !std::isfinite(denom)) return y0;
+            const float t = (xq - x0) / denom;
+            return y0 + t * (y1 - y0);
             };
 
-        // Apply per-sample ΔlogE on each channel’s own grid
+        // Apply per-sample warp using original queries against dedup'ed tables
         std::vector<float> dYcorr(N), dMcorr(N), dCcorr(N);
         for (size_t i = 0; i < N; ++i) {
-            const float aY = M[0][0] * nB[i] + M[1][0] * nG[i] + M[2][0] * nR[i];
-            const float aM = M[0][1] * nB[i] + M[1][1] * nG[i] + M[2][1] * nR[i];
-            const float aC = M[0][2] * nB[i] + M[1][2] * nG[i] + M[2][2] * nR[i];
+            const float aY = M[0][0] * nB[i] + M[1][0] * nG[i] + M[2][0] * nR[i]; // affects Blue layer curve (Y channel)
+            const float aM = M[0][1] * nB[i] + M[1][1] * nG[i] + M[2][1] * nR[i]; // affects Green layer curve (M channel)
+            const float aC = M[0][2] * nB[i] + M[1][2] * nG[i] + M[2][2] * nR[i]; // affects Red  layer curve (C channel)
 
-            const float xqY = clamp_warp(xB[i] - aY, xB.front(), xB.back());
-            const float xqM = clamp_warp(xG[i] - aM, xG.front(), xG.back());
-            const float xqC = clamp_warp(xR[i] - aC, xR.front(), xR.back());
+            const float xqY = clamp_warp(qB[i] - aY, XB.front(), XB.back());
+            const float xqM = clamp_warp(qG[i] - aM, XG.front(), XG.back());
+            const float xqC = clamp_warp(qR[i] - aC, XR.front(), XR.back());
 
-            dYcorr[i] = interp(xB, dY, xqY);
-            dMcorr[i] = interp(xG, dM, xqM);
-            dCcorr[i] = interp(xR, dC, xqC);
+            dYcorr[i] = interp(XB, YB, xqY);
+            dMcorr[i] = interp(XG, YG, xqM);
+            dCcorr[i] = interp(XR, YR, xqC);
         }
 
-        // Enforce monotonic non-decreasing densities and scrub NaNs (agx expects monotonic curves over logE)
-        auto enforce_monotone = [](std::vector<float>& v) {
-            float prev = (v.empty() || !std::isfinite(v[0])) ? 0.0f : v[0];
-            if (!std::isfinite(prev)) prev = 0.0f;
-            for (size_t i = 0; i < v.size(); ++i) {
-                float cur = v[i];
-                if (!std::isfinite(cur) || cur < 0.0f) cur = 0.0f;
-                if (cur < prev) cur = prev;
-                v[i] = cur;
-                prev = cur;
-            }
-            };
-        enforce_monotone(dYcorr);
-        enforce_monotone(dMcorr);
-        enforce_monotone(dCcorr);
-
-        // Store back per‑channel grids
-        outB.linear = dYcorr; outB.lambda_nm = xB;
-        outG.linear = dMcorr; outG.lambda_nm = xG;
-        outR.linear = dCcorr; outR.lambda_nm = xR;
+        // Write back to outputs (sizes unchanged)
+        for (size_t i = 0; i < N; ++i) {
+            outB.linear[i] = dYcorr[i];
+            outG.linear[i] = dMcorr[i];
+            outR.linear[i] = dCcorr[i];
+        }
     }
 
     // Define OFX params (no globals)
