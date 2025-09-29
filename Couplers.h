@@ -299,6 +299,7 @@ namespace Couplers {
                 for (size_t i = 1; i < X.size(); ++i) {
                     float xi = X[i];
                     float yi = std::isfinite(Y[i]) ? std::max(0.0f, Y[i]) : 0.0f;
+                    if (!std::isfinite(xi)) continue;
                     if (xi <= lastX + eps) {
                         // merge duplicates by keeping max density (monotone)
                         Yo.back() = std::max(Yo.back(), yi);
@@ -499,14 +500,27 @@ namespace Couplers {
         getD(kParamCouplersHighExpShift, high);
         getD(kParamCouplersSpatialSigma, spatial);
 
-        // Write spatial sigma into the runtime with sane fences
-        if (!std::isfinite(spatial) || spatial < 0.0) spatial = 0.0;
-        rt.spatialSigmaPixels = static_cast<float>(spatial);
+        // Defensive fences (slider thrash can transiently produce NaN/Inf)
+        auto f01 = [](double v)->float {
+            if (!std::isfinite(v)) return 0.0f;
+            if (v < 0.0) return 0.0f;
+            if (v > 1.0) return 1.0f;
+            return static_cast<float>(v);
+            };
+        auto fpos = [](double v, float maxv)->float {
+            if (!std::isfinite(v) || v < 0.0) return 0.0f;
+            return std::min(static_cast<float>(v), maxv);
+            };
+
+        // Spatial sigma
+        rt.spatialSigmaPixels = fpos(spatial, /*cap*/ 15.0f);
 
         rt.active = (activeInt != 0);
-        const float amount[3] = { float(ab), float(ag), float(ar) };
-        build_dir_matrix(rt.M, amount, float(sigma));
-        rt.highShift = float(high);
+        const float amount[3] = { f01(ab), f01(ag), f01(ar) };
+        const float sigmaF = fpos(sigma, /*cap*/ 10.0f);
+        build_dir_matrix(rt.M, amount, sigmaF);
+        rt.highShift = f01(high);
+
 
         // In enabled builds, dMax is supplied from per-instance WorkingState; avoid globals here.
         rt.dMax[0] = 1.0f;

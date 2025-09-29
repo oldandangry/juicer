@@ -316,29 +316,13 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 float D_M = sample_density_at_logE_safe(_ws->densG, leG);
                 float D_C = sample_density_at_logE_safe(_ws->densR, leR);
 
-                auto safe_norm = [](float D, float dmax)->float {
-                    float Din = (!std::isfinite(D) || D < 0.0f) ? 0.0f : D;
-                    float m = (std::isfinite(dmax) && dmax > 1e-4f) ? dmax : 1.0f;
-                    float n = Din / m;
-                    if (!std::isfinite(n)) n = 0.0f;
-                    return std::min(std::max(n, 0.0f), 1.0f);
-                    };
-                float nB = safe_norm(D_Y, _dirRT.dMax[0]);
-                float nG = safe_norm(D_M, _dirRT.dMax[1]);
-                float nR = safe_norm(D_C, _dirRT.dMax[2]);
-
-                auto high_boost = [&](float n)->float {
-                    float nb = n + _dirRT.highShift * n * n;
-                    if (!std::isfinite(nb)) nb = n;
-                    return std::min(std::max(nb, 0.0f), 1.0f);
-                    };
-                nB = high_boost(nB);
-                nG = high_boost(nG);
-                nR = high_boost(nR);
-
-                aY[idx] = _dirRT.M[0][0] * nB + _dirRT.M[1][0] * nG + _dirRT.M[2][0] * nR;
-                aM[idx] = _dirRT.M[0][1] * nB + _dirRT.M[1][1] * nG + _dirRT.M[2][1] * nR;
-                aC[idx] = _dirRT.M[0][2] * nB + _dirRT.M[1][2] * nG + _dirRT.M[2][2] * nR;
+                // Use the single, robust path (parity with agx)
+                float aCorr[3];
+                Couplers::ApplyInputLogE io{ { leB, leG, leR }, { D_Y, D_M, D_C } };
+                Couplers::compute_logE_corrections(io, _dirRT, aCorr);
+                aY[idx] = aCorr[0];
+                aM[idx] = aCorr[1];
+                aC[idx] = aCorr[2];
             }
         }
 
