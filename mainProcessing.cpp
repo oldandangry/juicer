@@ -108,6 +108,53 @@ namespace JuicerProc {
     }
 }
 
+// --- Spatial DIR: defensive curve utilities (monotonic + robust interpolation) ---
+
+static inline bool curve_ok(const Spectral::Curve& c) {
+    const size_t N = c.lambda_nm.size();
+    if (N < 2 || c.linear.size() != N) return false;
+    float prev = c.lambda_nm[0];
+    if (!std::isfinite(prev)) return false;
+    for (size_t i = 1; i < N; ++i) {
+        float xi = c.lambda_nm[i];
+        if (!std::isfinite(xi)) return false;
+        if (xi < prev) return false; // allow duplicates (xi == prev), but never decreasing
+        prev = xi;
+    }
+    return true;
+}
+
+static inline float sample_density_at_logE_safe(const Spectral::Curve& c, float le) {
+    const size_t N = c.lambda_nm.size();
+    if (N == 0 || c.linear.size() != N) return 0.0f;
+
+    const float xmin = c.lambda_nm.front();
+    const float xmax = c.lambda_nm.back();
+    float xq = le;
+    if (!std::isfinite(xq)) xq = xmin;
+    if (xq <= xmin) return c.linear.front();
+    if (xq >= xmax) return c.linear.back();
+
+    // lower_bound assumes non-decreasing X
+    size_t i1 = size_t(std::lower_bound(c.lambda_nm.begin(), c.lambda_nm.end(), xq) - c.lambda_nm.begin());
+    if (i1 == 0) return c.linear.front();
+    if (i1 >= N) return c.linear.back();
+    size_t i0 = i1 - 1;
+
+    float x0 = c.lambda_nm[i0], x1 = c.lambda_nm[i1];
+    float y0 = c.linear[i0], y1 = c.linear[i1];
+
+    // Any non-finite -> conservative fallback
+    if (!std::isfinite(x0) || !std::isfinite(x1) || !std::isfinite(y0) || !std::isfinite(y1)) {
+        return std::isfinite(y0) ? y0 : 0.0f;
+    }
+    const float denom = (x1 - x0);
+    if (!(denom > 0.0f) || !std::isfinite(denom)) return y0;
+    const float t = (xq - x0) / denom;
+    return y0 + t * (y1 - y0);
+}
+
+
 namespace JuicerProc {
     // Note: print preview should be measured at unit scene exposure for compensation;
     // caller passes exposureScale=1.0f to avoid compounding EV.
@@ -185,7 +232,16 @@ void JuicerProcessor::setComponents(int n) { _nComponents = n; }
 void JuicerProcessor::setScannerParams(const Scanner::Params& p) { _scannerParams = p; }
 void JuicerProcessor::setPrintParams(const Print::Params& p) { _printParams = p; }
 void JuicerProcessor::setDirRuntime(const Couplers::Runtime& rt) { _dirRT = rt; }
-void JuicerProcessor::setWorkingState(const WorkingState* ws, bool wsReady) { _ws = ws; _wsReady = wsReady; }
+void JuicerProcessor::setWorkingState(const WorkingState* ws, bool wsReady) {
+    _ws = ws;
+    _wsReady = wsReady;
+    // Align DIR normalization constants to per-instance maxima if available
+    if (_wsReady && _ws) {
+        _dirRT.dMax[0] = (std::isfinite(_ws->dMax[0]) && _ws->dMax[0] > 1e-4f) ? _ws->dMax[0] : 1.0f;
+        _dirRT.dMax[1] = (std::isfinite(_ws->dMax[1]) && _ws->dMax[1] > 1e-4f) ? _ws->dMax[1] : 1.0f;
+        _dirRT.dMax[2] = (std::isfinite(_ws->dMax[2]) && _ws->dMax[2] > 1e-4f) ? _ws->dMax[2] : 1.0f;
+    }
+}
 void JuicerProcessor::setPrintRuntime(const Print::Runtime* prt, bool printReady) { _prt = prt; _printReady = printReady; }
 void JuicerProcessor::setExposure(float exposureScale) {
     _exposureScale = exposureScale;
@@ -199,9 +255,8 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
     const bool doSpatial = std::isfinite(_dirRT.spatialSigmaPixels) && (_dirRT.spatialSigmaPixels > 0.5f);
 
     auto curvesReady = [&]()->bool {
-        return _ws && !_ws->densB.lambda_nm.empty() && !_ws->densB.linear.empty() &&
-            !_ws->densG.lambda_nm.empty() && !_ws->densG.linear.empty() &&
-            !_ws->densR.lambda_nm.empty() && !_ws->densR.linear.empty();
+        if (!_ws) return false;
+        return curve_ok(_ws->densB) && curve_ok(_ws->densG) && curve_ok(_ws->densR);
         };
 
     if (_dirRT.active && doSpatial && _nComponents >= 3 && _wsReady && _ws && curvesReady()) {        
@@ -257,9 +312,9 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 logE_G[idx] = leG;
                 logE_R[idx] = leR;
 
-                float D_Y = Spectral::sample_density_at_logE(_ws->densB, leB);
-                float D_M = Spectral::sample_density_at_logE(_ws->densG, leG);
-                float D_C = Spectral::sample_density_at_logE(_ws->densR, leR);
+                float D_Y = sample_density_at_logE_safe(_ws->densB, leB);
+                float D_M = sample_density_at_logE_safe(_ws->densG, leG);
+                float D_C = sample_density_at_logE_safe(_ws->densR, leR);
 
                 auto safe_norm = [](float D, float dmax)->float {
                     float Din = (!std::isfinite(D) || D < 0.0f) ? 0.0f : D;
@@ -341,9 +396,9 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 leR2 = clamp_to(leR2, _ws->densR);
 
                 float D_cmy[3];
-                D_cmy[0] = Spectral::sample_density_at_logE(_ws->densB, leB2);
-                D_cmy[1] = Spectral::sample_density_at_logE(_ws->densG, leG2);
-                D_cmy[2] = Spectral::sample_density_at_logE(_ws->densR, leR2);
+                D_cmy[0] = sample_density_at_logE_safe(_ws->densB, leB2);
+                D_cmy[1] = sample_density_at_logE_safe(_ws->densG, leG2);
+                D_cmy[2] = sample_density_at_logE_safe(_ws->densR, leR2);
 
                 // NaN scrub on sampled densities (agx expects non-negative, finite densities)
                 for (int i = 0; i < 3; ++i) {
@@ -372,25 +427,48 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     // 1) Negative transmittance from corrected densities
                     Print::negative_T_from_dyes(*_ws, D_cmy, Tneg, wNeutral);
 
+                    // Per-instance spectral shape to avoid global races and size mismatches
+                    const int K = _ws->tablesView.K;
+                    if (K <= 0) {
+                        // Defensive early-out: cannot proceed with spectral integration
+                        dstPix[0] = rgbOut[0];
+                        dstPix[1] = rgbOut[1];
+                        dstPix[2] = rgbOut[2];
+                        if (_nComponents == 4) dstPix[3] = srcPix[3];
+                        dstPix += _nComponents;
+                        continue;
+                    }
+
+                    // Ensure Tneg length is at least K (pad if needed)
+                    if (int(Tneg.size()) < K) Tneg.resize(size_t(K), 0.0f);
+
                     // 2) Enlarger illuminant exposure (no print exposure yet)
-                    Ee_expose.resize(Spectral::gShape.K);
-                    for (int i = 0; i < Spectral::gShape.K; ++i) {
-                        const float Ee = _prt->illumEnlarger.linear.empty() ? 1.0f : _prt->illumEnlarger.linear[i];
+                    Ee_expose.resize(size_t(K));
+                    for (int i = 0; i < K; ++i) {
+                        const float Ee = (_prt->illumEnlarger.linear.size() > size_t(i))
+                            ? _prt->illumEnlarger.linear[i]
+                            : 1.0f;
                         Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
                     }
 
                     // 3) Apply spectral dichroic filters with Y/M/C neutral values
-                    Ee_filtered.resize(Spectral::gShape.K);
+                    Ee_filtered.resize(size_t(K));
                     auto blend_filter = [](float curveVal, float amount)->float {
                         // AgX parity: optical density scaling → transmittance = curve^amount
                         const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
                         const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
                         return std::pow(c, a);
                         };
-                    for (int i = 0; i < Spectral::gShape.K; ++i) {
-                        const float fY = blend_filter(_prt->filterY.linear.empty() ? 1.0f : _prt->filterY.linear[i], _printParams.yFilter);
-                        const float fM = blend_filter(_prt->filterM.linear.empty() ? 1.0f : _prt->filterM.linear[i], _printParams.mFilter);
-                        const float fC = blend_filter(_prt->filterC.linear.empty() ? 1.0f : _prt->filterC.linear[i], _printParams.cFilter);
+                    for (int i = 0; i < K; ++i) {
+                        const float fY = blend_filter(
+                            (_prt->filterY.linear.size() > size_t(i)) ? _prt->filterY.linear[i] : 1.0f,
+                            _printParams.yFilter);
+                        const float fM = blend_filter(
+                            (_prt->filterM.linear.size() > size_t(i)) ? _prt->filterM.linear[i] : 1.0f,
+                            _printParams.mFilter);
+                        const float fC = blend_filter(
+                            (_prt->filterC.linear.size() > size_t(i)) ? _prt->filterC.linear[i] : 1.0f,
+                            _printParams.cFilter);
                         const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
                         Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
                     }
@@ -407,10 +485,11 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
 
                     // Agx parity: apply mid-gray compensation via green channel only (raw[1] *= factor)
                     {
-                        const float gFactor = std::isfinite(_printParams.exposureCompGFactor) ? std::max(0.0f, _printParams.exposureCompGFactor) : 1.0f;
+                        const float gFactor = std::isfinite(_printParams.exposureCompGFactor)
+                            ? std::max(0.0f, _printParams.exposureCompGFactor)
+                            : 1.0f;
                         raw[1] *= gFactor;
                     }
-
 
                     // 6) Map to print densities via calibrated per-channel logE offsets and DC curves
                     float D_print[3];
@@ -419,10 +498,15 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     // 7) Print transmittance
                     Print::print_T_from_dyes(_prt->profile, D_print, Tprint);
 
+                    // Ensure Tprint length is at least K (pad if needed)
+                    if (int(Tprint.size()) < K) Tprint.resize(size_t(K), 0.0f);
+
                     // 8) Viewing illuminant and integration to DWG
-                    Ee_viewed.resize(Spectral::gShape.K);
-                    for (int i = 0; i < Spectral::gShape.K; ++i) {
-                        const float Ev = _prt->illumView.linear.empty() ? 1.0f : _prt->illumView.linear[i];
+                    Ee_viewed.resize(size_t(K));
+                    for (int i = 0; i < K; ++i) {
+                        const float Ev = (_prt->illumView.linear.size() > size_t(i))
+                            ? _prt->illumView.linear[i]
+                            : 1.0f;
                         Ee_viewed[i] = std::max(0.0f, Ev * Tprint[i]);
                     }
                     float XYZ[3];

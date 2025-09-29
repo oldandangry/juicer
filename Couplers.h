@@ -448,50 +448,15 @@ namespace Couplers {
     // Couplers.h
 
     inline void maybe_precorrect_curves(
-        OfxImageEffectHandle instance,
-        OfxImageEffectSuiteV1* effectSuite,
-        OfxParameterSuiteV1* paramSuite)
+        OfxImageEffectHandle /*instance*/,
+        OfxImageEffectSuiteV1* /*effectSuite*/,
+        OfxParameterSuiteV1* /*paramSuite*/)
     {
-        if (gPrecorrectApplied) return;
-
-        // Read params
-        OfxParamSetHandle ps = nullptr;
-        effectSuite->getParamSet(instance, &ps);
-
-        auto getB = [&](const char* nm, int def)->int {
-            OfxParamHandle h = nullptr; int v = def;
-            if (ps && paramSuite->paramGetHandle(ps, nm, &h, nullptr) == kOfxStatOK && h)
-                paramSuite->paramGetValue(h, &v);
-            return v;
-            };
-        auto getD = [&](const char* nm, double def)->double {
-            OfxParamHandle h = nullptr; double v = def;
-            if (ps && paramSuite->paramGetHandle(ps, nm, &h, nullptr) == kOfxStatOK && h)
-                paramSuite->paramGetValue(h, &v);
-            return v;
-            };
-
-        // Respect toggle
-        const int doPre = getB(kParamCouplersPrecorrect, 1);
-        if (!doPre) { gPrecorrectApplied = true; return; }
-
-        // Fetch amounts in B,G, R order (rename or map if your UI is R,G,B)
-        const float aB = static_cast<float>(getD(kParamCouplersAmountB, 0.5));
-        const float aG = static_cast<float>(getD(kParamCouplersAmountG, 0.7));
-        const float aR = static_cast<float>(getD(kParamCouplersAmountR, 0.7));
-        const float sigma = static_cast<float>(getD(kParamCouplersLayerSigma, 1.0));
-        const float high = static_cast<float>(getD(kParamCouplersHighExpShift, 0.0));
-
-        const float amount[3] = { aB, aG, aR };
-        float M[3][3];
-        build_dir_matrix(M, amount, sigma);
-
-        // Apply pre-warp
-        precorrect_density_curves_before_DIR(M, high);
-
+        // Enabled builds must not mutate global density curves at render-time.
+        // Pre-correction is applied once during rebuild_working_state.
+        // Keep a hard no-op to avoid races and size changes mid-render.
         gPrecorrectApplied = true;
     }
-
 
     struct Runtime {
         bool  active = true;
@@ -533,6 +498,10 @@ namespace Couplers {
         getD(kParamCouplersLayerSigma, sigma);
         getD(kParamCouplersHighExpShift, high);
         getD(kParamCouplersSpatialSigma, spatial);
+
+        // Write spatial sigma into the runtime with sane fences
+        if (!std::isfinite(spatial) || spatial < 0.0) spatial = 0.0;
+        rt.spatialSigmaPixels = static_cast<float>(spatial);
 
         rt.active = (activeInt != 0);
         const float amount[3] = { float(ab), float(ag), float(ar) };
