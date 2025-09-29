@@ -366,18 +366,19 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
         // Pass B
         for (int yy = 0; yy < tileH; ++yy) {
             if (_effect.abort()) break;
-            float* dstPix = reinterpret_cast<float*>(_dstImg->getPixelAddress(procWindow.x1, procWindow.y1 + yy));
             for (int xx = 0; xx < tileW; ++xx) {
                 const int x = procWindow.x1 + xx;
                 const int y = procWindow.y1 + yy;
+
+                // Fetch both src and dst addresses *per pixel* to avoid stride/tiling assumptions
+                float* dstPix = reinterpret_cast<float*>(_dstImg->getPixelAddress(x, y));
                 const float* srcPix = reinterpret_cast<const float*>(_srcImg->getPixelAddress(x, y));
                 if (!dstPix || !srcPix) {
-                    if (dstPix) dstPix += _nComponents;
                     continue;
                 }
 
                 float rgbIn[3] = { srcPix[0], srcPix[1], srcPix[2] };
-                float rgbOut[3] = { rgbIn[0], rgbIn[1], rgbIn[2] };
+                float rgbOut[3] = { rgbIn[0],  rgbIn[1],  rgbIn[2] };
 
                 const size_t idx = size_t(yy * tileW + xx);
                 float leB2 = logE_B[idx] - aY_blur[idx];
@@ -400,7 +401,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 D_cmy[1] = sample_density_at_logE_safe(_ws->densG, leG2);
                 D_cmy[2] = sample_density_at_logE_safe(_ws->densR, leR2);
 
-                // NaN scrub on sampled densities (agx expects non-negative, finite densities)
+                // NaN scrub on sampled densities (non-negative, finite)
                 for (int i = 0; i < 3; ++i) {
                     float v = D_cmy[i];
                     if (!std::isfinite(v) || v < 0.0f) v = 0.0f;
@@ -435,8 +436,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                         dstPix[1] = rgbOut[1];
                         dstPix[2] = rgbOut[2];
                         if (_nComponents == 4) dstPix[3] = srcPix[3];
-                        dstPix += _nComponents;
-                        continue;
+                        continue; // NO pointer arithmetic
                     }
 
                     // Ensure Tneg length is at least K (pad if needed)
@@ -451,10 +451,9 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                         Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
                     }
 
-                    // 3) Apply spectral dichroic filters with Y/M/C neutral values
+                    // 3) Apply spectral dichroic filters with Y/M/C neutral values (agx density-as-OD)
                     Ee_filtered.resize(size_t(K));
                     auto blend_filter = [](float curveVal, float amount)->float {
-                        // AgX parity: optical density scaling → transmittance = curve^amount
                         const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
                         const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
                         return std::pow(c, a);
@@ -478,12 +477,10 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     Print::raw_exposures_from_filtered_light(
                         _prt->profile, Ee_filtered, raw, _ws->tablesView.deltaLambda);
 
-                    // 5) Apply print exposure ONCE (agx: raw *= exposure)
+                    // 5) Apply print exposure ONCE (agx: raw *= exposure) + green-only comp factor
                     raw[0] *= _printParams.exposure;
                     raw[1] *= _printParams.exposure;
                     raw[2] *= _printParams.exposure;
-
-                    // Agx parity: apply mid-gray compensation via green channel only (raw[1] *= factor)
                     {
                         const float gFactor = std::isfinite(_printParams.exposureCompGFactor)
                             ? std::max(0.0f, _printParams.exposureCompGFactor)
@@ -497,8 +494,6 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
 
                     // 7) Print transmittance
                     Print::print_T_from_dyes(_prt->profile, D_print, Tprint);
-
-                    // Ensure Tprint length is at least K (pad if needed)
                     if (int(Tprint.size()) < K) Tprint.resize(size_t(K), 0.0f);
 
                     // 8) Viewing illuminant and integration to DWG
@@ -514,11 +509,11 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
                 }
 
+                // Write out (no pointer increments)
                 dstPix[0] = rgbOut[0];
                 dstPix[1] = rgbOut[1];
                 dstPix[2] = rgbOut[2];
                 if (_nComponents == 4) dstPix[3] = srcPix[3];
-                dstPix += _nComponents;
             }
         }
         return;
@@ -529,16 +524,13 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
         if (_effect.abort()) break;
 
         if (_nComponents >= 3) {
-            float* dstPix = reinterpret_cast<float*>(_dstImg->getPixelAddress(procWindow.x1, y));
             for (int x = procWindow.x1; x < procWindow.x2; ++x) {
+                float* dstPix = reinterpret_cast<float*>(_dstImg->getPixelAddress(x, y));
                 const float* srcPix = reinterpret_cast<const float*>(_srcImg->getPixelAddress(x, y));
-                if (!dstPix || !srcPix) {
-                    if (dstPix) dstPix += _nComponents;
-                    continue;
-                }
+                if (!dstPix || !srcPix) continue;
 
                 float rgbIn[3] = { srcPix[0], srcPix[1], srcPix[2] };
-                float rgbOut[3] = { rgbIn[0], rgbIn[1], rgbIn[2] };
+                float rgbOut[3] = { rgbIn[0],  rgbIn[1],  rgbIn[2] };
 
                 if (_wsReady && _ws) {
                     if (_printParams.bypass || !_printReady || !_prt) {
@@ -560,15 +552,13 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 dstPix[1] = rgbOut[1];
                 dstPix[2] = rgbOut[2];
                 if (_nComponents == 4) dstPix[3] = srcPix[3];
-                dstPix += _nComponents;
             }
-        }
+        }        
         else if (_nComponents == 1) {
-            float* dstPix = reinterpret_cast<float*>(_dstImg->getPixelAddress(procWindow.x1, y));
             for (int x = procWindow.x1; x < procWindow.x2; ++x) {
+                float* dstPix = reinterpret_cast<float*>(_dstImg->getPixelAddress(x, y));
                 const float* srcPix = reinterpret_cast<const float*>(_srcImg->getPixelAddress(x, y));
                 if (dstPix && srcPix) dstPix[0] = srcPix[0];
-                if (dstPix) dstPix += 1;
             }
         }
     }
