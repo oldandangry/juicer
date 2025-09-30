@@ -286,12 +286,18 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 float rgbIn[3] = { srcPix[0], srcPix[1], srcPix[2] };
                 float E[3];
                 Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
-                    rgbIn, E, _exposureScale,
+                    rgbIn, E, 1.0f,
                     (_ws && _ws->tablesView.K > 0 ? &_ws->tablesView : nullptr),
                     (_ws && _ws->spdReady ? _ws->spdSInv : nullptr),
                     (int)std::clamp(_ws ? _ws->spectralMode : 0, 0, 1),
                     (_ws && (_ws->exposureModel == 1) && _ws->spdReady),
                     _ws->sensB, _ws->sensG, _ws->sensR);
+
+                // Apply camera exposure explicitly to E to avoid hidden/no-op in table path.
+                {
+                    const float sExp = (std::isfinite(_exposureScale) ? std::max(0.0f, _exposureScale) : 1.0f);
+                    if (sExp != 1.0f) { E[0] *= sExp; E[1] *= sExp; E[2] *= sExp; }
+                }
 
                 float leB = std::log10(std::max(E[0], 1e-6f)) + _ws->logEOffB;
                 float leG = std::log10(std::max(E[1], 1e-6f)) + _ws->logEOffG;

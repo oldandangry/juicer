@@ -19,6 +19,7 @@ namespace Couplers {
         float M[3][3] = { {0,0,0},{0,0,0},{0,0,0} };
         float highShift = 0.0f;
         float dMax[3] = { 1.0f, 1.0f, 1.0f };
+        float spatialSigmaPixels = 0.0f; // ABI parity with enabled build
     };
 
     inline void define_params(OfxImageEffectHandle, OfxImageEffectSuiteV1*, OfxPropertySuiteV1*, OfxParameterSuiteV1*) {}
@@ -33,6 +34,11 @@ namespace Couplers {
     // Optional parity helpers used by the print/scanner paths
     struct ApplyInputLogE { float logE[3]; float D[3]; };
     inline void apply_runtime_logE(ApplyInputLogE&, const Runtime&) {}
+    inline void apply_runtime_logE_with_curves(
+        ApplyInputLogE&, const Runtime&,
+        const Spectral::Curve&, const Spectral::Curve&, const Spectral::Curve&) {
+    }
+
 } // namespace Couplers
 
 #else
@@ -362,6 +368,21 @@ namespace Couplers {
             dMcorr[i] = interp(XG, YG, xqM);
             dCcorr[i] = interp(XR, YR, xqC);
         }
+        // Enforce non-negative, monotone (non-decreasing) outputs to match agx behavior and tests
+        auto sanitize_monotone_nonneg = [](std::vector<float>& v) {
+            if (v.empty()) return;
+            float prev = std::isfinite(v[0]) ? std::max(0.0f, v[0]) : 0.0f;
+            v[0] = prev;
+            for (size_t i = 1; i < v.size(); ++i) {
+                float cur = std::isfinite(v[i]) ? std::max(0.0f, v[i]) : 0.0f;
+                if (cur < prev) cur = prev;      // enforce monotone
+                v[i] = cur;
+                prev = cur;
+            }
+            };
+        sanitize_monotone_nonneg(dYcorr);
+        sanitize_monotone_nonneg(dMcorr);
+        sanitize_monotone_nonneg(dCcorr);
 
         // Write back to outputs (sizes unchanged)
         for (size_t i = 0; i < N; ++i) {
