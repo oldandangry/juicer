@@ -353,6 +353,9 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
         scrubClamp(aM_blur);
         scrubClamp(aC_blur);
 
+        // Precompute spectral midgray factor once (AgX parity), constant across the tile.
+        const float kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, _exposureScale);
+
         // Pass B
         for (int yy = 0; yy < tileH; ++yy) {
             if (_effect.abort()) break;
@@ -467,16 +470,13 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     Print::raw_exposures_from_filtered_light(
                         _prt->profile, Ee_filtered, raw, _ws->tablesView.deltaLambda);
 
-                    // 5) Apply print exposure ONCE (agx: raw *= exposure) + green-only comp factor
+                    // 5) Apply print exposure ONCE (agx: raw *= exposure) + midgray compensation (vector)
                     raw[0] *= _printParams.exposure;
                     raw[1] *= _printParams.exposure;
                     raw[2] *= _printParams.exposure;
-                    {
-                        const float gFactor = std::isfinite(_printParams.exposureCompGFactor)
-                            ? std::max(0.0f, _printParams.exposureCompGFactor)
-                            : 1.0f;
-                        raw[1] *= gFactor;
-                    }
+
+                    // Spectral midgray compensation factor (precomputed)
+                    raw[0] *= kMid_spectral; raw[1] *= kMid_spectral; raw[2] *= kMid_spectral;
 
                     // 6) Map to print densities via calibrated per-channel logE offsets and DC curves
                     float D_print[3];

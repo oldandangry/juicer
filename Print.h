@@ -10,6 +10,7 @@
 #include <sstream>
 #include <algorithm>
 
+
 namespace JuicerTrace {
     void write(const char* tag, const std::string& msg);
 }
@@ -456,32 +457,23 @@ namespace Print {
 
 
 
-    // Compute negative transmittance T_neg(λ) from over‑B+F densities D_neg using per‑instance data
+    // Compute negative transmittance T_neg(λ) from over-B+F densities D_neg using per-instance data
     inline void negative_T_from_dyes(const WorkingState& ws,
         const float D_neg[3],
         std::vector<float>& Tneg_out,
         float neutralW = 0.0f)
     {
-        const int K = Spectral::gShape.K;
-        Tneg_out.assign((size_t)K, 1.0f);
-
+        // Use the instance's spectral length; do NOT gate off gShape here.
+        const int K = ws.tablesView.K;
+        Tneg_out.assign((size_t)std::max(K, 0), 1.0f);
         if (K <= 0) return;
 
-        // Per‑instance baseline (if available)
+        // Per-instance baseline (if available)
         const bool hasBL = ws.hasBaseline &&
             (int)ws.baseMin.linear.size() == K &&
             (int)ws.baseMid.linear.size() == K;
 
-        // Access per‑instance epsilon (negative dyes) from tablesView if present.
-        // We defensively handle cases where the tables may not expose eps; in that case, we leave Tneg as 1.0.
-        const bool haveTables = (ws.tablesView.K > 0) &&
-            ((int)ws.tablesView.K == K);
-
-        // Guard: if no tables, return neutral
-        if (!haveTables) return;
-
-        // Expected: ws.tablesView provides per‑wavelength epsilon for Y/M/C negative dyes
-        // We access via helper lambdas that fallback to 0.0f if arrays are missing.
+        // Access per-wavelength epsilon for Y/M/C negative dyes; lambdas fallback to 0 if missing.
         auto epsY_at = [&](int i)->float {
             return (i < (int)ws.tablesView.epsY.size()) ? ws.tablesView.epsY[i] : 0.0f;
             };
@@ -562,6 +554,97 @@ namespace Print {
         raw[1] = std::max(0.0f, static_cast<float>(rM * dl)); // M
         raw[2] = std::max(0.0f, static_cast<float>(rC * dl)); // C
     }
+
+    // Midgray compensation factor computed spectrally (AgX parity): scale RAW so that mid-gray (green channel)
+    // remains invariant under camera exposure compensation EV. This uses the same negative development,
+    // enlarger illuminant (including dichroic filters), and print paper sensitivities as the print leg.
+    inline float compute_exposure_factor_midgray(
+        const WorkingState& ws,
+        const Runtime& rt,
+        const Params& prm,
+        float cameraExposureScale)
+    {
+        // If EV not meaningful, no compensation.
+        if (!std::isfinite(cameraExposureScale) || cameraExposureScale <= 0.0f) return 1.0f;
+
+        // 1) Midgray DWG rgb, scaled by camera EV: [0.184, 0.184, 0.184] * 2^EV  → exposureScale parameter in code
+        const float rgbMid[3] = {
+            0.184f * cameraExposureScale,
+            0.184f * cameraExposureScale,
+            0.184f * cameraExposureScale
+        };
+
+        // 2) DWG → per-layer exposures (negative leg), exposure applied explicitly here
+        float E[3];
+        Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
+            rgbMid, E, 1.0f,
+            (ws.tablesView.K > 0 ? &ws.tablesView : nullptr),
+            (ws.spdReady ? ws.spdSInv : nullptr),
+            (int)std::clamp(ws.spectralMode, 0, 1),
+            (ws.exposureModel == 1) && ws.spdReady,
+            ws.sensB, ws.sensG, ws.sensR);
+        E[0] *= cameraExposureScale; E[1] *= cameraExposureScale; E[2] *= cameraExposureScale;
+
+        // 3) LogE with per-layer offsets, clamp to domain, sample negative densities
+        auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
+            if (c.lambda_nm.empty()) return le;
+            const float xmin = c.lambda_nm.front();
+            const float xmax = c.lambda_nm.back();
+            if (!std::isfinite(le)) return xmin;
+            return std::min(std::max(le, xmin), xmax);
+            };
+        const float logE[3] = {
+            std::log10(std::max(E[0], 1e-6f)) + ws.logEOffB,
+            std::log10(std::max(E[1], 1e-6f)) + ws.logEOffG,
+            std::log10(std::max(E[2], 1e-6f)) + ws.logEOffR
+        };
+        float logE_clamped[3] = {
+            clamp_logE_to_curve(ws.densB, logE[0]),
+            clamp_logE_to_curve(ws.densG, logE[1]),
+            clamp_logE_to_curve(ws.densR, logE[2]),
+        };
+        float D_neg[3] = {
+            Spectral::sample_density_at_logE(ws.densB, logE_clamped[0]),
+            Spectral::sample_density_at_logE(ws.densG, logE_clamped[1]),
+            Spectral::sample_density_at_logE(ws.densR, logE_clamped[2]),
+        };
+
+        // 4) Negative transmittance (baseline neutral blend)
+        const float wNeutral = Spectral::neutral_blend_weight_from_DWG_rgb(rgbMid);
+        thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered;
+        negative_T_from_dyes(ws, D_neg, Tneg, wNeutral);
+
+        // 5) Enlarger illuminant exposure
+        Ee_expose.resize(Spectral::gShape.K);
+        for (int i = 0; i < Spectral::gShape.K; ++i) {
+            const float Ee = rt.illumEnlarger.linear.empty() ? 1.0f : rt.illumEnlarger.linear[i];
+            Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
+        }
+
+        // 6) Apply Y/M/C dichroic filters at current amounts (AgX parity: transmittance = curve^amount)
+        Ee_filtered.resize(Spectral::gShape.K);
+        auto blend_filter = [](float curveVal, float amount)->float {
+            const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
+            const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
+            return std::pow(c, a);
+            };
+        for (int i = 0; i < Spectral::gShape.K; ++i) {
+            const float fY = blend_filter(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
+            const float fM = blend_filter(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
+            const float fC = blend_filter(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
+            const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
+            Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
+        }
+
+        // 7) RAW via print paper sensitivities (log domain → linear sensitivity)
+        float raw[3];
+        raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
+
+        // 8) Factor is inverse of midgray green RAW; guard for tiny values
+        const float g = std::max(1e-12f, raw[1]);
+        return 1.0f / g;
+    }
+
 
 
     inline float sample_dc(const Spectral::Curve& dc, float logE) {
@@ -738,127 +821,124 @@ namespace Print {
             Tprint_out[i] = std::exp(-Spectral::kLn10 * Dlambda);
         }
     }
-
     // >>> BEGIN INSERT: test-only probe helpers (Print.h) REMOVE AFTER USE
 #ifdef JUICER_TESTS
-    namespace Print {
 
-        struct Probe {
-            std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
-            float raw[3]{ 0,0,0 };
-            float D_print[3]{ 0,0,0 };
-            float XYZ[3]{ 0,0,0 };
-        };
+    struct Probe {
+        std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
+        float raw[3]{ 0,0,0 };
+        float D_print[3]{ 0,0,0 };
+        float XYZ[3]{ 0,0,0 };
+    };
 
-        // Start from *negative* logE (already camera-exposed), then run the *print* leg.
-        // This isolates the print path (filters → raw → DC curves → Tprint → viewing → XYZ → DWG).
-        inline void simulate_print_from_logE_for_test(
-            const float logE_neg[3],
-            const Params& prm,
-            const Runtime& rt,
-            const Couplers::Runtime& /*dirRT*/,   // DIR is applied on negative leg in main path; off here to isolate print
-            const WorkingState& ws,
-            float /*exposureScale*/,              // not used when starting at logE
-            float rgbOut[3],
-            Probe* probe /*nullable*/)
-        {
-            // 1) Sample negative densities from per-instance negative curves.
-            auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
-                if (c.lambda_nm.empty()) return le;
-                const float xmin = c.lambda_nm.front();
-                const float xmax = c.lambda_nm.back();
-                if (!std::isfinite(le)) return xmin;
-                return std::min(std::max(le, xmin), xmax);
-                };
-
-            float leB = clamp_logE_to_curve(ws.densB, logE_neg[0]);
-            float leG = clamp_logE_to_curve(ws.densG, logE_neg[1]);
-            float leR = clamp_logE_to_curve(ws.densR, logE_neg[2]);
-
-            float D_neg[3] = {
-                Spectral::sample_density_at_logE(ws.densB, leB), // Y from B-layer curve
-                Spectral::sample_density_at_logE(ws.densG, leG), // M from G-layer curve
-                Spectral::sample_density_at_logE(ws.densR, leR)  // C from R-layer curve
+    // Start from *negative* logE (already camera-exposed), then run the *print* leg.
+    // This isolates the print path (filters → raw → DC curves → Tprint → viewing → XYZ → DWG).
+    inline void simulate_print_from_logE_for_test(
+        const float logE_neg[3],
+        const Params& prm,
+        const Runtime& rt,
+        const Couplers::Runtime& /*dirRT*/,   // DIR is applied on negative leg in main path; off here to isolate print
+        const WorkingState& ws,
+        float exposureScale,              // not used when starting at logE
+        float rgbOut[3],
+        Probe* probe /*nullable*/)
+    {
+        // 1) Sample negative densities from per-instance negative curves.
+        auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
+            if (c.lambda_nm.empty()) return le;
+            const float xmin = c.lambda_nm.front();
+            const float xmax = c.lambda_nm.back();
+            if (!std::isfinite(le)) return xmin;
+            return std::min(std::max(le, xmin), xmax);
             };
 
-            // 2) Negative transmittance with baseline blend
-            const float rgbInDummy[3] = { 0.5f, 0.5f, 0.5f }; // used only for neutral weight
-            const float wNeutral = Spectral::neutral_blend_weight_from_DWG_rgb(rgbInDummy);
-            thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
-            negative_T_from_dyes(ws, D_neg, Tneg, wNeutral);
+        float leB = clamp_logE_to_curve(ws.densB, logE_neg[0]);
+        float leG = clamp_logE_to_curve(ws.densG, logE_neg[1]);
+        float leR = clamp_logE_to_curve(ws.densR, logE_neg[2]);
 
-            // 3) Enlarger exposure (neutral illuminant here; print exposure happens later on RAW)
-            Ee_expose.resize(Spectral::gShape.K);
-            for (int i = 0; i < Spectral::gShape.K; ++i) {
-                const float Ee = rt.illumEnlarger.linear.empty() ? 1.0f : rt.illumEnlarger.linear[i];
-                Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
-            }
+        float D_neg[3] = {
+            Spectral::sample_density_at_logE(ws.densB, leB), // Y from B-layer curve
+            Spectral::sample_density_at_logE(ws.densG, leG), // M from G-layer curve
+            Spectral::sample_density_at_logE(ws.densR, leR)  // C from R-layer curve
+        };
 
-            // 4) Apply neutral Y/M/C dichroic filters to enlarger light
-            Ee_filtered.resize(Spectral::gShape.K);
-            auto blend_filter = [](float curveVal, float amount)->float {
-                const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
-                const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
-                return std::pow(c, a);
-                };
-            for (int i = 0; i < Spectral::gShape.K; ++i) {
-                const float fY = blend_filter(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
-                const float fM = blend_filter(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
-                const float fC = blend_filter(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
-                const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
-                Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
-            }
+        // 2) Negative transmittance with baseline blend
+        const float rgbInDummy[3] = { 0.5f, 0.5f, 0.5f }; // used only for neutral weight
+        const float wNeutral = Spectral::neutral_blend_weight_from_DWG_rgb(rgbInDummy);
+        thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
+        negative_T_from_dyes(ws, D_neg, Tneg, wNeutral);
 
-            // 5) Contract to channel RAW using print sensitometries
-            float raw[3] = { 0,0,0 };
-            raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
-
-            // Apply print exposure (agx parity)
-            raw[0] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-            raw[1] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-            raw[2] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-
-            // Mid-gray compensation via green channel only
-            const float gFactor = std::isfinite(prm.exposureCompGFactor) ? std::max(0.0f, prm.exposureCompGFactor) : 1.0f;
-            raw[1] *= gFactor;
-
-            // 6) RAW → print densities via DC curves and per-channel logE offsets
-            float D_print[3] = { 0,0,0 };
-            print_densities_from_Eprint(rt.profile, raw, D_print);
-
-            // 7) Print transmittance
-            print_T_from_dyes(rt.profile, D_print, Tprint);
-
-            // 8) Viewing illuminant and integration to XYZ
-            Ee_viewed.resize(Spectral::gShape.K);
-            for (int i = 0; i < Spectral::gShape.K; ++i) {
-                const float Ev = rt.illumView.linear.empty() ? 1.0f : rt.illumView.linear[i];
-                Ee_viewed[i] = std::max(0.0f, Ev * Tprint[i]);
-            }
-
-            float XYZ[3] = { 0,0,0 };
-            Spectral::Ee_to_XYZ_given_tables(ws.tablesView, Ee_viewed, XYZ);
-
-            // XYZ → DWG
-            Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
-
-            if (probe) {
-                probe->Tneg = Tneg;
-                probe->Ee_expose = Ee_expose;
-                probe->Ee_filtered = Ee_filtered;
-                probe->Tprint = Tprint;
-                probe->Ee_viewed = Ee_viewed;
-                probe->raw[0] = raw[0]; probe->raw[1] = raw[1]; probe->raw[2] = raw[2];
-                probe->D_print[0] = D_print[0]; probe->D_print[1] = D_print[1]; probe->D_print[2] = D_print[2];
-                probe->XYZ[0] = XYZ[0]; probe->XYZ[1] = XYZ[1]; probe->XYZ[2] = XYZ[2];
-            }
+        // 3) Enlarger exposure (neutral illuminant here; print exposure happens later on RAW)
+        Ee_expose.resize(Spectral::gShape.K);
+        for (int i = 0; i < Spectral::gShape.K; ++i) {
+            const float Ee = rt.illumEnlarger.linear.empty() ? 1.0f : rt.illumEnlarger.linear[i];
+            Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
         }
 
-    } // namespace Print
+        // 4) Apply neutral Y/M/C dichroic filters to enlarger light
+        Ee_filtered.resize(Spectral::gShape.K);
+        auto blend_filter = [](float curveVal, float amount)->float {
+            const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
+            const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
+            return std::pow(c, a);
+            };
+        for (int i = 0; i < Spectral::gShape.K; ++i) {
+            const float fY = blend_filter(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
+            const float fM = blend_filter(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
+            const float fC = blend_filter(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
+            const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
+            Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
+        }
+
+        // 5) Contract to channel RAW using print sensitometries
+        float raw[3] = { 0,0,0 };
+        raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
+
+        // Apply print exposure (agx parity)
+        raw[0] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
+        raw[1] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
+        raw[2] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
+
+        // Midgray compensation (AgX parity): scale RAW vector by spectral midgray factor from camera EV.
+        {
+            const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureScale);
+            raw[0] *= kMid; raw[1] *= kMid; raw[2] *= kMid;
+        }
+
+        // 6) RAW → print densities via DC curves and per-channel logE offsets
+        float D_print[3] = { 0,0,0 };
+        print_densities_from_Eprint(rt.profile, raw, D_print);
+
+        // 7) Print transmittance
+        print_T_from_dyes(rt.profile, D_print, Tprint);
+
+        // 8) Viewing illuminant and integration to XYZ
+        Ee_viewed.resize(Spectral::gShape.K);
+        for (int i = 0; i < Spectral::gShape.K; ++i) {
+            const float Ev = rt.illumView.linear.empty() ? 1.0f : rt.illumView.linear[i];
+            Ee_viewed[i] = std::max(0.0f, Ev * Tprint[i]);
+        }
+
+        float XYZ[3] = { 0,0,0 };
+        Spectral::Ee_to_XYZ_given_tables(ws.tablesView, Ee_viewed, XYZ);
+
+        // XYZ → DWG
+        Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
+
+        if (probe) {
+            probe->Tneg = Tneg;
+            probe->Ee_expose = Ee_expose;
+            probe->Ee_filtered = Ee_filtered;
+            probe->Tprint = Tprint;
+            probe->Ee_viewed = Ee_viewed;
+            probe->raw[0] = raw[0]; probe->raw[1] = raw[1]; probe->raw[2] = raw[2];
+            probe->D_print[0] = D_print[0]; probe->D_print[1] = D_print[1]; probe->D_print[2] = D_print[2];
+            probe->XYZ[0] = XYZ[0]; probe->XYZ[1] = XYZ[1]; probe->XYZ[2] = XYZ[2];
+        }
+    }
+
 #endif // JUICER_TESTS
 // <<< END INSERT REMOVE AFTER USE
-
-
 
 
     // Full pixel pipeline when print is active
@@ -967,16 +1047,14 @@ namespace Print {
         raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
 
         // Apply print exposure scaling to raw (agx: raw *= print_exposure)
-        raw[0] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-        raw[1] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-        raw[2] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
+        const float expPrint = std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
+        raw[0] *= expPrint; raw[1] *= expPrint; raw[2] *= expPrint;
 
-        // Agx parity: apply mid-gray compensation via green channel only (before log10 and development).
-        // raw *= [1, exposureCompGFactor, 1]
-        {
-            const float gFactor = std::isfinite(prm.exposureCompGFactor) ? std::max(0.0f, prm.exposureCompGFactor) : 1.0f;
-            raw[1] *= gFactor;
-        }
+        // Spectral midgray compensation (AgX parity): scale RAW vector by factor = 1 / RAW_midgray_green.
+        // Compute once per call, independent of pixel content.
+        const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureScale);
+        raw[0] *= kMid; raw[1] *= kMid; raw[2] *= kMid;
+
 
 
         // Map raw to print densities via per-channel logE offsets and DC curves
