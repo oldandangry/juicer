@@ -124,7 +124,7 @@ namespace Couplers {
             xR[i] = cR.lambda_nm[i]; dC[i] = cR.linear[i];
         }
 
-        // Monotonicity guard
+        // Monotonicity guard (non-decreasing grids)
         auto is_monotonic = [](const std::vector<float>& X)->bool {
             if (X.empty() || !std::isfinite(X.front()) || !std::isfinite(X.back())) return false;
             for (size_t i = 1; i < X.size(); ++i) {
@@ -166,13 +166,33 @@ namespace Couplers {
             nR[i] = boost(c);
         }
 
+        // Build shifted logE axes (pre-DIR exposures)
+        std::vector<float> xShiftB(N), xShiftG(N), xShiftR(N);
+        for (size_t i = 0; i < N; ++i) {
+            const float aY = M[0][0] * nB[i] + M[1][0] * nG[i] + M[2][0] * nR[i];
+            const float aM = M[0][1] * nB[i] + M[1][1] * nG[i] + M[2][1] * nR[i];
+            const float aC = M[0][2] * nB[i] + M[1][2] * nG[i] + M[2][2] * nR[i];
+            xShiftB[i] = xB[i] - aY;
+            xShiftG[i] = xG[i] - aM;
+            xShiftR[i] = xR[i] - aC;
+        }
+
+        auto mono_shift = [](const std::vector<float>& X)->bool {
+            if (X.empty() || !std::isfinite(X.front()) || !std::isfinite(X.back())) return false;
+            for (size_t i = 1; i < X.size(); ++i) {
+                if (!std::isfinite(X[i]) || X[i] < X[i - 1]) return false;
+            }
+            return true;
+            };
+        if (!(mono_shift(xShiftB) && mono_shift(xShiftG) && mono_shift(xShiftR))) return;
+
         // Inclusive clamp (no inward bias)
         auto clamp_warp = [](float xq, float xmin, float xmax)->float {
             if (!std::isfinite(xq)) return xmin;
             return std::min(std::max(xq, xmin), xmax);
             };
 
-        // Local interpolator
+        // Local interpolator using shifted axes
         auto interp = [](const std::vector<float>& X, const std::vector<float>& Y, float xq)->float {
             if (X.empty() || Y.empty()) return 0.0f;
             const float xmin = X.front(), xmax = X.back();
@@ -197,20 +217,16 @@ namespace Couplers {
             return y0 + t * (y1 - y0);
             };
 
-        // Apply per-sample ΔlogE on each channel’s own grid
+        /// Apply inverse warp: sample post-DIR densities over shifted axes at original logE grid
         std::vector<float> dYcorr(N), dMcorr(N), dCcorr(N);
         for (size_t i = 0; i < N; ++i) {
-            const float aY = M[0][0] * nB[i] + M[1][0] * nG[i] + M[2][0] * nR[i];
-            const float aM = M[0][1] * nB[i] + M[1][1] * nG[i] + M[2][1] * nR[i];
-            const float aC = M[0][2] * nB[i] + M[1][2] * nG[i] + M[2][2] * nR[i];
+            const float xqY = clamp_warp(xB[i], xShiftB.front(), xShiftB.back());
+            const float xqM = clamp_warp(xG[i], xShiftG.front(), xShiftG.back());
+            const float xqC = clamp_warp(xR[i], xShiftR.front(), xShiftR.back());
 
-            const float xqY = clamp_warp(xB[i] - aY, xB.front(), xB.back());
-            const float xqM = clamp_warp(xG[i] - aM, xG.front(), xG.back());
-            const float xqC = clamp_warp(xR[i] - aC, xR.front(), xR.back());
-
-            dYcorr[i] = interp(xB, dY, xqY);
-            dMcorr[i] = interp(xG, dM, xqM);
-            dCcorr[i] = interp(xR, dC, xqC);
+            dYcorr[i] = interp(xShiftB, dY, xqY);
+            dMcorr[i] = interp(xShiftG, dM, xqM);
+            dCcorr[i] = interp(xShiftR, dC, xqC);
         }
 
         for (size_t i = 0; i < N; ++i) {
@@ -290,6 +306,26 @@ namespace Couplers {
             nR[i] = boost(safe_div(dC[i], cMax));
         }
 
+        // Build shifted logE axes (pre-DIR exposures)
+        std::vector<float> xShiftB(N), xShiftG(N), xShiftR(N);
+        for (size_t i = 0; i < N; ++i) {
+            const float aY = M[0][0] * nB[i] + M[1][0] * nG[i] + M[2][0] * nR[i];
+            const float aM = M[0][1] * nB[i] + M[1][1] * nG[i] + M[2][1] * nR[i];
+            const float aC = M[0][2] * nB[i] + M[1][2] * nG[i] + M[2][2] * nR[i];
+            xShiftB[i] = qB[i] - aY;
+            xShiftG[i] = qG[i] - aM;
+            xShiftR[i] = qR[i] - aC;
+        }
+
+        auto mono_shift = [](const std::vector<float>& X)->bool {
+            if (X.empty() || !std::isfinite(X.front()) || !std::isfinite(X.back())) return false;
+            for (size_t i = 1; i < X.size(); ++i) {
+                if (!std::isfinite(X[i]) || X[i] < X[i - 1]) return false;
+            }
+            return true;
+            };
+        if (!(mono_shift(xShiftB) && mono_shift(xShiftG) && mono_shift(xShiftR))) return;
+
         // Dedup STRICT on interpolation data ONLY (not on the query grids)
         auto dedup_strict = [](const std::vector<float>& X, const std::vector<float>& Y,
             std::vector<float>& Xo, std::vector<float>& Yo) {
@@ -317,9 +353,9 @@ namespace Couplers {
             };
 
         std::vector<float> XB, YB, XG, YG, XR, YR;
-        dedup_strict(xB, dY, XB, YB);
-        dedup_strict(xG, dM, XG, YG);
-        dedup_strict(xR, dC, XR, YR);
+        dedup_strict(xShiftB, dY, XB, YB);
+        dedup_strict(xShiftG, dM, XG, YG);
+        dedup_strict(xShiftR, dC, XR, YR);
         if (XB.size() < 2 || XG.size() < 2 || XR.size() < 2) return; // nothing reliable to do
 
         // Inclusive clamp (NO inward bias; agx parity; fixes identity expectations)
@@ -351,16 +387,12 @@ namespace Couplers {
             return y0 + t * (y1 - y0);
             };
 
-        // Apply per-sample warp using original queries against dedup'ed tables
+        // Apply inverse warp: interpolate post-DIR densities over shifted axes at original grids
         std::vector<float> dYcorr(N), dMcorr(N), dCcorr(N);
         for (size_t i = 0; i < N; ++i) {
-            const float aY = M[0][0] * nB[i] + M[1][0] * nG[i] + M[2][0] * nR[i]; // affects Blue layer curve (Y channel)
-            const float aM = M[0][1] * nB[i] + M[1][1] * nG[i] + M[2][1] * nR[i]; // affects Green layer curve (M channel)
-            const float aC = M[0][2] * nB[i] + M[1][2] * nG[i] + M[2][2] * nR[i]; // affects Red  layer curve (C channel)
-
-            const float xqY = clamp_warp(qB[i] - aY, XB.front(), XB.back());
-            const float xqM = clamp_warp(qG[i] - aM, XG.front(), XG.back());
-            const float xqC = clamp_warp(qR[i] - aC, XR.front(), XR.back());
+            const float xqY = clamp_warp(qB[i], XB.front(), XB.back());
+            const float xqM = clamp_warp(qG[i], XG.front(), XG.back());
+            const float xqC = clamp_warp(qR[i], XR.front(), XR.back());
 
             dYcorr[i] = interp(XB, YB, xqY);
             dMcorr[i] = interp(XG, YG, xqM);
