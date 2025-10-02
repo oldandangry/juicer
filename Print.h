@@ -567,14 +567,11 @@ namespace Print {
         // If EV not meaningful, no compensation.
         if (!std::isfinite(cameraExposureScale) || cameraExposureScale <= 0.0f) return 1.0f;
 
-        // 1) Midgray DWG rgb, scaled by camera EV: [0.184, 0.184, 0.184] * 2^EV  → exposureScale parameter in code
-        const float rgbMid[3] = {
-            0.184f * cameraExposureScale,
-            0.184f * cameraExposureScale,
-            0.184f * cameraExposureScale
-        };
+        // 1) Midgray DWG rgb at canonical brightness (AgX parity: constant 18.4% reflectance)
+        const float rgbMid[3] = { 0.184f, 0.184f, 0.184f };
 
-        // 2) DWG → per-layer exposures (negative leg), exposure applied explicitly here
+        // 2) DWG → per-layer exposures (negative leg); apply camera EV exactly once here.
+        //    NOTE: Do not pre-scale rgbMid by cameraExposureScale — avoids double-applying EV.
         float E[3];
         Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
             rgbMid, E, 1.0f,

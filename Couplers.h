@@ -98,8 +98,6 @@ namespace Couplers {
         }
     }
 
-
-
     // Pre-correct 1D density curves (before DIR) — agx parity
     inline void precorrect_density_curves_before_DIR(const float M[3][3], float highExpShift) {
         using Spectral::Curve;
