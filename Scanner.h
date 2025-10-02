@@ -97,18 +97,33 @@ namespace Scanner {
         }
 #endif
 
-        // Spectral integration (still uses global tables for eps/CMFs/illuminant)
-        float XYZ[3];
-        if (ws.hasBaseline && ws.tablesView.hasBaseline) {
+        // Spectral integration using scanner viewing tables (fallback to view tables if missing)
+        const SpectralTables* tables = nullptr;
+        if (ws.tablesScan.K > 0) {
+            tables = &ws.tablesScan;
+        }
+        else if (ws.tablesView.K > 0) {
+            tables = &ws.tablesView;
+        }
+
+        if (!tables) {
+            rgbOut[0] = rgbIn[0];
+            rgbOut[1] = rgbIn[1];
+            rgbOut[2] = rgbIn[2];
+            return;
+        }
+
+        float XYZ[3] = { 0.0f, 0.0f, 0.0f };
+        if (ws.hasBaseline && tables->hasBaseline) {
             const float w = Spectral::neutral_blend_weight_from_DWG_rgb(rgbIn);
-            Spectral::dyes_to_XYZ_with_baseline_given_tables(ws.tablesView, D_cmy, w, XYZ);
+            Spectral::dyes_to_XYZ_with_baseline_given_tables(*tables, D_cmy, w, XYZ);
         }
         else {
-            Spectral::dyes_to_XYZ_given_tables(ws.tablesView, D_cmy, XYZ);
+            Spectral::dyes_to_XYZ_given_tables(*tables, D_cmy, XYZ);
         }
 
         // XYZ → DWG + contrast
-        Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);        
+        Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
     }
 
 } // namespace Scanner

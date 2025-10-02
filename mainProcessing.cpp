@@ -403,15 +403,25 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 }
 
                 if (_printParams.bypass || !_printReady || !_prt) {
-                    float XYZ[3];
-                    if (_ws->hasBaseline && _ws->tablesView.hasBaseline) {
-                        const float w = Spectral::neutral_blend_weight_from_DWG_rgb(rgbIn);
-                        Spectral::dyes_to_XYZ_with_baseline_given_tables(_ws->tablesView, D_cmy, w, XYZ);
+                    const SpectralTables* tables = nullptr;
+                    if (_ws->tablesScan.K > 0) {
+                        tables = &_ws->tablesScan;
                     }
-                    else {
-                        Spectral::dyes_to_XYZ_given_tables(_ws->tablesView, D_cmy, XYZ);
+                    else if (_ws->tablesView.K > 0) {
+                        tables = &_ws->tablesView;
                     }
-                    Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
+
+                    if (tables) {
+                        float XYZ[3] = { 0.0f, 0.0f, 0.0f };
+                        if (_ws->hasBaseline && tables->hasBaseline) {
+                            const float w = Spectral::neutral_blend_weight_from_DWG_rgb(rgbIn);
+                            Spectral::dyes_to_XYZ_with_baseline_given_tables(*tables, D_cmy, w, XYZ);
+                        }
+                        else {
+                            Spectral::dyes_to_XYZ_given_tables(*tables, D_cmy, XYZ);
+                        }
+                        Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
+                    }                    
                 }
                 else {
                     // Spatial DIR path must continue from D_cmy to preserve blurred corrections.

@@ -272,7 +272,7 @@ namespace Spectral {
         }
     }
 
-    // Build a curve pinned to SpectralShape from log10 pairs (convert to linear, peak-normalize, then resample)
+    // Build a curve pinned to SpectralShape from log10 pairs (convert to linear and resample without renormalizing).
     inline void build_curve_on_shape_from_log10_pairs(Curve& curve,
         const std::vector<std::pair<float, float>>& log10pairs,
         const SpectralShape& s = gShape) {
@@ -284,14 +284,12 @@ namespace Spectral {
         // Convert to linear first
         std::vector<std::pair<float, float>> lin;
         lin.reserve(log10pairs.size());
-        float peak = 0.0f;
         for (auto& p : log10pairs) {
-            const float val = std::pow(10.0f, p.second);
+            float val = std::pow(10.0f, p.second);
+            if (!std::isfinite(val) || val < 0.0f)
+                val = 0.0f;
             lin.emplace_back(p.first, val);
-            if (val > peak) peak = val;
-        }
-        if (peak > 0.0f) {
-            for (auto& p : lin) p.second /= peak;
+            
         }
         build_curve_on_shape_from_linear_pairs(curve, lin, s);
     }

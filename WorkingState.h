@@ -46,6 +46,9 @@ struct WorkingState {
     // Per-instance precomputed spectral tables for the viewing illuminant
     SpectralTables tablesView;
 
+    // Per-instance spectral tables for scanner/negative viewing (D50 parity)
+    SpectralTables tablesScan;
+
     // SPD reconstruction per-instance (non-global)
     float spdSInv[9] = { 1,0,0, 0,1,0, 0,0,1 };
     bool  spdReady = false;

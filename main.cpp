@@ -689,6 +689,15 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         /*baseMin*/ baseMin, /*baseMid*/ baseMid, /*hasBaseline*/ hasBaseline,
         target->tablesView);
 
+    // Build scanner tables using film-negative viewing illuminant (AgX parity uses D50)
+    Spectral::Curve illumScan = Spectral::build_curve_D50_pinned(S.dataDir + "Illuminants\\D50.csv");
+    Spectral::build_tables_from_curves_non_global(
+        /*epsY*/ epsY, /*epsM*/ epsM, /*epsC*/ epsC,
+        /*xbar*/ Spectral::gXBar, /*ybar*/ Spectral::gYBar, /*zbar*/ Spectral::gZBar,
+        /*illumView*/ illumScan,
+        /*baseMin*/ baseMin, /*baseMid*/ baseMid, /*hasBaseline*/ hasBaseline,
+        target->tablesScan);
+
     // Compute per-instance SPD S^-1 for reconstruction
     Spectral::compute_S_inverse_from_tables(target->tablesView, target->spdSInv);
     target->spdReady = true;
@@ -704,8 +713,6 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
             << S.printRT.profile.logEOffC;
         JTRACE("BUILD", oss.str());
     }
-
-
 
     if (target->tablesView.K <= 0 || !target->spdReady) {
         JTRACE("BUILD", "tablesView or spdSInv not ready; will cause wsReady=0 in render.");
@@ -738,7 +745,9 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         const bool ok_dens = finiteCurve(densB) && finiteCurve(densG) && finiteCurve(densR);
         const bool ok_sens = finiteCurve(sensB) && finiteCurve(sensG) && finiteCurve(sensR);
         const bool ok_base = finiteCurve(baseMin) && finiteCurve(baseMid);
-        const bool ok_tables = (target->tablesView.K == Spectral::gShape.K);
+        const bool ok_tables =
+            (target->tablesView.K == Spectral::gShape.K) &&
+            (target->tablesScan.K == Spectral::gShape.K);
 
         std::ostringstream oss;
         oss << "pre-Ecal: ok_dens=" << (ok_dens ? 1 : 0)
@@ -760,7 +769,9 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         for (int i = 0; i < 9; ++i) {
             if (!std::isfinite(target->spdSInv[i])) { ok_spd = false; break; }
         }
-        const bool ok_invYn = std::isfinite(target->tablesView.invYn) && target->tablesView.invYn > 0.0f;
+        const bool ok_invYn =
+            std::isfinite(target->tablesView.invYn) && target->tablesView.invYn > 0.0f &&
+            std::isfinite(target->tablesScan.invYn) && target->tablesScan.invYn > 0.0f;
 
         std::ostringstream oss;
         oss << "pre-Ecal: ok_spd=" << (ok_spd ? 1 : 0)
