@@ -78,8 +78,7 @@ namespace Spectral {
                 __m256 bw = _mm256_set1_ps(base.w);
                 __m256 dBase = _mm256_fmadd_ps(bw, _mm256_sub_ps(bMid, bMin), bMin);
 
-                __m256 eSum = _mm256_add_ps(eY, _mm256_add_ps(eM, eC));
-                Dlambda = _mm256_fmadd_ps(dBase, eSum, Dlambda);
+                Dlambda = _mm256_add_ps(Dlambda, dBase);
             }
 
             __m256 T = exp_ps_approx(_mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_mul_ps(kLN10, Dlambda)));
@@ -101,7 +100,7 @@ namespace Spectral {
             float Dlambda = dY * epsY[i] + dM * epsM[i] + dC * epsC[i];
             if (base.hasBaseline) {
                 float dBase = base.baseMin[i] + base.w * (base.baseMid[i] - base.baseMin[i]);
-                Dlambda += dBase * (epsY[i] + epsM[i] + epsC[i]);
+                Dlambda += dBase;
             }
             float T = std::exp(-kLn10 * Dlambda);
             X += T * Ax[i];

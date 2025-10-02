@@ -485,17 +485,14 @@ namespace Print {
             };
 
         for (int i = 0; i < K; ++i) {
-            const float dBase = hasBL
+            const float baseSpectral = hasBL
                 ? (ws.baseMin.linear[i] + neutralW * (ws.baseMid.linear[i] - ws.baseMin.linear[i]))
                 : 0.0f;
 
-            const float Dy = (D_neg[0] + dBase);
-            const float Dm = (D_neg[1] + dBase);
-            const float Dc = (D_neg[2] + dBase);
-
-            const float Dlambda = Dy * epsY_at(i)
-                + Dm * epsM_at(i)
-                + Dc * epsC_at(i);
+            const float Dlambda = D_neg[0] * epsY_at(i)
+                + D_neg[1] * epsM_at(i)
+                + D_neg[2] * epsC_at(i)
+                + baseSpectral;
 
             Tneg_out[i] = std::exp(-Spectral::kLn10 * Dlambda);
         }
@@ -809,12 +806,13 @@ namespace Print {
         const int K = Spectral::gShape.K;
         Tprint_out.resize(K);
         for (int i = 0; i < K; ++i) {
-            float dBase = p.hasBaseline
-                ? (p.baseMin.linear[i]) // MVP: fixed baseline min; mid weighting can come later
+            const float baseSpectral = p.hasBaseline
+                ? p.baseMin.linear[i]
                 : 0.0f;
-            const float Dlambda = (D_print[0] + dBase) * (p.epsY.linear[i])
-                + (D_print[1] + dBase) * (p.epsM.linear[i])
-                + (D_print[2] + dBase) * (p.epsC.linear[i]);
+            const float Dlambda = D_print[0] * p.epsY.linear[i]
+                + D_print[1] * p.epsM.linear[i]
+                + D_print[2] * p.epsC.linear[i]
+                + baseSpectral;
             Tprint_out[i] = std::exp(-Spectral::kLn10 * Dlambda);
         }
     }
@@ -995,9 +993,9 @@ namespace Print {
                 sample_ws(logE_clamped, D_neg);
 
 #ifdef JUICER_ENABLE_COUPLERS
-                // Skip local (non-spatial) DIR when curves were precorrected and spatial diffusion is disabled
-                const bool allowLocalDIR = (!ws.dirPrecorrected) || (dirRT.spatialSigmaPixels > 0.5f);
-                if (dirRT.active && allowLocalDIR) {
+                // Always apply local DIR corrections when active (agx parity), even if curves were
+                // precorrected and the spatial diffusion sigma is zero.
+                if (dirRT.active) {
                     Couplers::ApplyInputLogE io{ {logE[0], logE[1], logE[2]}, {D_neg[0], D_neg[1], D_neg[2]} };
                     // Per-instance clamp variant: aligns clamp domain to the same curves we sample
                     Couplers::apply_runtime_logE_with_curves(io, dirRT, ws.densB, ws.densG, ws.densR);

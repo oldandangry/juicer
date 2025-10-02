@@ -1452,10 +1452,13 @@ namespace Spectral {
         double X = 0.0, Y = 0.0, Z = 0.0;
         const int K = T.K;
         for (int i = 0; i < K; ++i) {
-            const float dBase = T.hasBaseline ? (T.baseMin[i] + w * (T.baseMid[i] - T.baseMin[i])) : 0.0f;
-            const float Dlambda = (dyes[0] + dBase) * T.epsY[i]
-                + (dyes[1] + dBase) * T.epsM[i]
-                + (dyes[2] + dBase) * T.epsC[i];
+            const float baseSpectral = T.hasBaseline
+                ? (T.baseMin[i] + w * (T.baseMid[i] - T.baseMin[i]))
+                : 0.0f;
+            const float Dlambda = dyes[0] * T.epsY[i]
+                + dyes[1] * T.epsM[i]
+                + dyes[2] * T.epsC[i]
+                + baseSpectral;
             const float Tlambda = std::exp(-kLn10 * Dlambda);
             X += Tlambda * T.Ax[i];
             Y += Tlambda * T.Ay[i];
@@ -2060,13 +2063,14 @@ namespace Spectral {
         double X = 0.0, Y = 0.0, Z = 0.0;
         const int K = gShape.K;
         for (int i = 0; i < K; ++i) {
-            const float dBase = gHasBaseline
+            const float baseSpectral = gHasBaseline
                 ? (gBaselineMinTable[i] + base.w * (gBaselineMidTable[i] - gBaselineMinTable[i]))
                 : 0.0f;
 
-            const float Dlambda = (dyes[0] + dBase) * gEpsYTable[i]
-                + (dyes[1] + dBase) * gEpsMTable[i]
-                + (dyes[2] + dBase) * gEpsCTable[i];
+            const float Dlambda = dyes[0] * gEpsYTable[i]
+                + dyes[1] * gEpsMTable[i]
+                + dyes[2] * gEpsCTable[i]
+                + baseSpectral;
             const float T = std::exp(-kLn10 * Dlambda);
             X += T * gAx[i];
             Y += T * gAy[i];

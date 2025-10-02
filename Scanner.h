@@ -86,9 +86,9 @@ namespace Scanner {
         sample_densities_from_ws(ws, logE_clamped, D_cmy);
 
 #ifdef JUICER_ENABLE_COUPLERS
-        // Skip local (non-spatial) DIR when curves were precorrected and spatial diffusion is disabled
-        const bool allowLocalDIR = (!ws.dirPrecorrected) || (dirRT.spatialSigmaPixels > 0.5f);
-        if (dirRT.active && allowLocalDIR) {
+        // Always apply local DIR corrections when enabled (agx parity), even if the build precorrected
+        // density curves and spatial diffusion is disabled.
+        if (dirRT.active) {
             Couplers::ApplyInputLogE io{ {logE[0], logE[1], logE[2]}, {D_cmy[0], D_cmy[1], D_cmy[2]} };
             // Per-instance clamp variant: aligns clamp domain to the same curves we sample
             Couplers::apply_runtime_logE_with_curves(io, dirRT, ws.densB, ws.densG, ws.densR);
