@@ -40,3 +40,4 @@ vcpkg_installed/
 *.rsp
 *.lastbuildstate
 *.zip
+/third_party/nlohmann/json.hpp

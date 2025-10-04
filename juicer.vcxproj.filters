@@ -54,6 +54,9 @@
     <ClCompile Include="ProcTestWrappers.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ProFileJSONLoader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SpectralMath.h">
@@ -87,6 +90,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="NeutralFilters.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ProfileJSONLoader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -53,6 +53,8 @@
 #include <unordered_map>
 #include "mainProcessing.h"
 #include "NeutralFilters.h"
+#include "ProfileJSONLoader.h"
+#include <utility>
 
 // Plugin data directory (immutable)
 static const std::string gDataDir =
@@ -322,6 +324,25 @@ static std::string stock_dir_for_index(int index) {
     return gDataDir + std::string("Stock\\") + kFilmStockOptions[index] + "\\";
 }
 
+static std::string last_path_segment(const std::string& path) {
+    if (path.empty()) return {};
+    size_t end = path.find_last_not_of("\\/");
+    if (end == std::string::npos) return {};
+    size_t start = path.find_last_of("\\/", end);
+    if (start == std::string::npos) {
+        return path.substr(0, end + 1);
+    }
+    return path.substr(start + 1, end - start);
+}
+
+static const char* film_json_key_for_folder(const std::string& folder) {
+    if (folder == "Vision3 250D") return "kodak_vision3_250d_uc";
+    if (folder == "Vision3 50D") return "kodak_vision3_50d_uc";
+    if (folder == "Vision3 200T") return "kodak_vision3_200t_uc";
+    if (folder == "Vision3 500T") return "kodak_vision3_500t_uc";
+    return nullptr;
+}
+
 // Safe CSV loader that fails silently (no exceptions)
 static std::vector<std::pair<float, float>> load_pairs_silent(const std::string& path) {
     try {
@@ -336,20 +357,68 @@ static std::vector<std::pair<float, float>> load_pairs_silent(const std::string&
 static bool load_film_stock_into_base(const std::string& stockDir, InstanceState& S) {
     JTRACE_SCOPE("STOCK", std::string("load_film_stock_into_base: ") + stockDir);   
 
-    auto y_data = load_pairs_silent(stockDir + "dye_density_y.csv");
-    auto m_data = load_pairs_silent(stockDir + "dye_density_m.csv");
-    auto c_data = load_pairs_silent(stockDir + "dye_density_c.csv");
+    std::vector<std::pair<float, float>> y_data;
+    std::vector<std::pair<float, float>> m_data;
+    std::vector<std::pair<float, float>> c_data;
 
-    auto b_sens = load_pairs_silent(stockDir + "log_sensitivity_b.csv");
-    auto g_sens = load_pairs_silent(stockDir + "log_sensitivity_g.csv");
-    auto r_sens = load_pairs_silent(stockDir + "log_sensitivity_r.csv");
+    std::vector<std::pair<float, float>> b_sens;
+    std::vector<std::pair<float, float>> g_sens;
+    std::vector<std::pair<float, float>> r_sens;
 
-    auto dmin = load_pairs_silent(stockDir + "dye_density_min.csv");
-    auto dmid = load_pairs_silent(stockDir + "dye_density_mid.csv");
+    std::vector<std::pair<float, float>> dmin;
+    std::vector<std::pair<float, float>> dmid;
 
-    auto dc_b = load_pairs_silent(stockDir + "density_curve_b.csv");
-    auto dc_g = load_pairs_silent(stockDir + "density_curve_g.csv");
-    auto dc_r = load_pairs_silent(stockDir + "density_curve_r.csv");
+    std::vector<std::pair<float, float>> dc_b;
+    std::vector<std::pair<float, float>> dc_g;
+    std::vector<std::pair<float, float>> dc_r;
+
+    bool usedJson = false;
+
+    {
+        const std::string folder = last_path_segment(stockDir);
+        if (!folder.empty()) {
+            if (const char* jsonKey = film_json_key_for_folder(folder)) {
+                const std::string jsonPath = gDataDir + std::string("profiles\\") + jsonKey + std::string(".json");
+                Profiles::AgxFilmProfile profile;
+                if (Profiles::load_agx_film_profile_json(jsonPath, profile)) {
+                    usedJson = true;
+                    c_data = std::move(profile.dyeC);
+                    m_data = std::move(profile.dyeM);
+                    y_data = std::move(profile.dyeY);
+                    b_sens = std::move(profile.logSensB);
+                    g_sens = std::move(profile.logSensG);
+                    r_sens = std::move(profile.logSensR);
+                    dc_b = std::move(profile.densityCurveB);
+                    dc_g = std::move(profile.densityCurveG);
+                    dc_r = std::move(profile.densityCurveR);
+                    dmin = std::move(profile.baseMin);
+                    dmid = std::move(profile.baseMid);
+                    JTRACE("STOCK", std::string("loaded agx profile json: ") + jsonKey);
+                }
+                else {
+                    JTRACE("STOCK", std::string("agx profile json unavailable: ") + jsonKey);
+                }
+            }
+        }
+    }
+
+    if (!usedJson) {
+        JTRACE("STOCK", "falling back to legacy CSV stock assets");
+        y_data = load_pairs_silent(stockDir + "dye_density_y.csv");
+        m_data = load_pairs_silent(stockDir + "dye_density_m.csv");
+        c_data = load_pairs_silent(stockDir + "dye_density_c.csv");
+
+        b_sens = load_pairs_silent(stockDir + "log_sensitivity_b.csv");
+        g_sens = load_pairs_silent(stockDir + "log_sensitivity_g.csv");
+        r_sens = load_pairs_silent(stockDir + "log_sensitivity_r.csv");
+
+        dmin = load_pairs_silent(stockDir + "dye_density_min.csv");
+        dmid = load_pairs_silent(stockDir + "dye_density_mid.csv");
+
+        dc_b = load_pairs_silent(stockDir + "density_curve_b.csv");
+        dc_g = load_pairs_silent(stockDir + "density_curve_g.csv");
+        dc_r = load_pairs_silent(stockDir + "density_curve_r.csv");
+    }
 
     {
         auto sz = [](const auto& v) { return (int)v.size(); };
@@ -361,15 +430,15 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
         JTRACE("STOCK", oss.str());
     }
 
-    if (y_data.empty()) JTRACE("STOCK", "dye_density_y.csv missing/empty");
-    if (m_data.empty()) JTRACE("STOCK", "dye_density_m.csv missing/empty");
-    if (c_data.empty()) JTRACE("STOCK", "dye_density_c.csv missing/empty");
-    if (b_sens.empty()) JTRACE("STOCK", "log_sensitivity_b.csv missing/empty");
-    if (g_sens.empty()) JTRACE("STOCK", "log_sensitivity_g.csv missing/empty");
-    if (r_sens.empty()) JTRACE("STOCK", "log_sensitivity_r.csv missing/empty");
-    if (dc_b.empty()) JTRACE("STOCK", "density_curve_b.csv missing/empty");
-    if (dc_g.empty()) JTRACE("STOCK", "density_curve_g.csv missing/empty");
-    if (dc_r.empty()) JTRACE("STOCK", "density_curve_r.csv missing/empty");
+    if (y_data.empty()) JTRACE("STOCK", "dye_density_y missing/empty");
+    if (m_data.empty()) JTRACE("STOCK", "dye_density_m missing/empty");
+    if (c_data.empty()) JTRACE("STOCK", "dye_density_c missing/empty");
+    if (b_sens.empty()) JTRACE("STOCK", "log_sensitivity_b missing/empty");
+    if (g_sens.empty()) JTRACE("STOCK", "log_sensitivity_g missing/empty");
+    if (r_sens.empty()) JTRACE("STOCK", "log_sensitivity_r missing/empty");
+    if (dc_b.empty()) JTRACE("STOCK", "density_curve_b missing/empty");
+    if (dc_g.empty()) JTRACE("STOCK", "density_curve_g missing/empty");
+    if (dc_r.empty()) JTRACE("STOCK", "density_curve_r missing/empty");
 
     const bool okCore =
         !y_data.empty() && !m_data.empty() && !c_data.empty() &&
