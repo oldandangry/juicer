@@ -2123,9 +2123,11 @@ namespace Spectral {
         float D[3] = { D_curve_over_BF[0], D_curve_over_BF[1], D_curve_over_BF[2] };        
 
         // 3) Integrate under Ee_view using per-call normalization above.
+
+        const float neutralW = neutral_blend_weight_from_DWG_rgb(rgbIn);
         float XYZ[3];
         if (gHasBaseline) {
-            dyes_to_XYZ_given_Ee_with_baseline(D, XYZ);
+            dyes_to_XYZ_given_Ee_with_baseline(D, neutralW, XYZ);
         }
         else {
             dyes_to_XYZ_given_Ee(D, XYZ);
