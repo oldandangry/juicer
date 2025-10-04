@@ -13,6 +13,9 @@ namespace Profiles {
         std::vector<std::pair<float, float>> baseMin;
         std::vector<std::pair<float, float>> baseMid;
 
+        std::string densitometer;
+        std::vector<float> densityMidNeutral;
+
         std::vector<std::pair<float, float>> logSensR;
         std::vector<std::pair<float, float>> logSensG;
         std::vector<std::pair<float, float>> logSensB;

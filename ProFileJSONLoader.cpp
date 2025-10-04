@@ -63,6 +63,31 @@ namespace Profiles {
             return false;
         }
 
+        if (root.contains("info")) {
+            const Json& info = root["info"];
+            if (info.contains("densitometer") && info["densitometer"].is_string()) {
+                outProfile.densitometer = info["densitometer"].get<std::string>();
+            }
+            if (info.contains("density_midscale_neutral")) {
+                const Json& mid = info["density_midscale_neutral"];
+                outProfile.densityMidNeutral.clear();
+                if (mid.is_array()) {
+                    for (const auto& v : mid) {
+                        float val = value_or_default(v, std::numeric_limits<float>::quiet_NaN());
+                        if (std::isfinite(val)) {
+                            outProfile.densityMidNeutral.push_back(val);
+                        }
+                    }
+                }
+                else {
+                    float val = value_or_default(mid, std::numeric_limits<float>::quiet_NaN());
+                    if (std::isfinite(val)) {
+                        outProfile.densityMidNeutral.push_back(val);
+                    }
+                }
+            }
+        }
+
         if (!root.contains("data")) {
             return false;
         }

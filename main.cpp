@@ -1,6 +1,7 @@
 #define JUICER_ENABLE_COUPLERS 1
 
 #include <mutex>
+#include <cctype>
 
 // OpenFX 1.4 canonical headers (no non-spec feature macros)
 #include "ofxCore.h"        // OfxHost, OfxPlugin, kOfxAction*
@@ -131,6 +132,8 @@ struct BaseState {
     Spectral::Curve densB, densG, densR;      // density curves (logE -> D)
     Spectral::Curve baseMin, baseMid;         // negative baseline min/mid
     bool hasBaseline = false;
+    std::string densitometerType;
+    std::vector<float> densityMidNeutral;
 };
 
 
@@ -335,6 +338,29 @@ static std::string last_path_segment(const std::string& path) {
     return path.substr(start + 1, end - start);
 }
 
+static std::string sanitize_densitometer_type(const std::string& type) {
+    std::string out;
+    out.reserve(type.size());
+    bool lastUnderscore = false;
+    for (char ch : type) {
+        unsigned char uc = static_cast<unsigned char>(ch);
+        if (std::isalnum(uc)) {
+            out.push_back(static_cast<char>(std::tolower(uc)));
+            lastUnderscore = false;
+        }
+        else if (ch == '_' || ch == '-' || ch == ' ') {
+            if (!lastUnderscore && !out.empty()) {
+                out.push_back('_');
+                lastUnderscore = true;
+            }
+        }
+    }
+    while (!out.empty() && out.back() == '_') {
+        out.pop_back();
+    }
+    return out;
+}
+
 static const char* film_json_key_for_folder(const std::string& folder) {
     if (folder == "Vision3 250D") return "kodak_vision3_250d_uc";
     if (folder == "Vision3 50D") return "kodak_vision3_50d_uc";
@@ -355,7 +381,7 @@ static std::vector<std::pair<float, float>> load_pairs_silent(const std::string&
 
 /// Reload film stock assets into BaseState (no global mutation). Returns true on success.
 static bool load_film_stock_into_base(const std::string& stockDir, InstanceState& S) {
-    JTRACE_SCOPE("STOCK", std::string("load_film_stock_into_base: ") + stockDir);   
+    JTRACE_SCOPE("STOCK", std::string("load_film_stock_into_base: ") + stockDir);
 
     std::vector<std::pair<float, float>> y_data;
     std::vector<std::pair<float, float>> m_data;
@@ -373,6 +399,8 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
     std::vector<std::pair<float, float>> dc_r;
 
     bool usedJson = false;
+    S.base.densitometerType.clear();
+    S.base.densityMidNeutral.clear();
 
     {
         const std::string folder = last_path_segment(stockDir);
@@ -393,6 +421,8 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
                     dc_r = std::move(profile.densityCurveR);
                     dmin = std::move(profile.baseMin);
                     dmid = std::move(profile.baseMid);
+                    S.base.densitometerType = sanitize_densitometer_type(profile.densitometer);
+                    S.base.densityMidNeutral = std::move(profile.densityMidNeutral);
                     JTRACE("STOCK", std::string("loaded agx profile json: ") + jsonKey);
                 }
                 else {
@@ -499,7 +529,8 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
             << "/" << (int)S.base.densR.linear.size()
             << " baseMin/baseMid K=" << (int)S.base.baseMin.linear.size()
             << "/" << (int)S.base.baseMid.linear.size()
-            << " hasBaseline=" << (S.base.hasBaseline ? 1 : 0);
+            << " hasBaseline=" << (S.base.hasBaseline ? 1 : 0)
+            << " densType=" << (S.base.densitometerType.empty() ? std::string("none") : S.base.densitometerType);
         JTRACE("STOCK", oss.str());
     }
 
@@ -563,15 +594,34 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         JTRACE("BUILD", "unmix: entered");
 
         // Load Status A (or chosen) responsivities pinned to shape
-        auto load_resp = [&](const std::string& rel)->std::vector<float> {
+        auto load_resp = [&](char channel)->std::vector<float> {
             std::vector<float> out;
-            (void)load_resampled_channel(S.dataDir + rel, out);
-            JTRACE("BUILD", std::string("unmix: loaded ") + rel + " size=" + std::to_string(out.size()));
+            auto try_load = [&](const std::string& rel) {
+                if (load_resampled_channel(S.dataDir + rel, out)) {
+                    JTRACE("BUILD", std::string("unmix: loaded ") + rel + " size=" + std::to_string(out.size()));
+                    return true;
+                }
+                return false;
+            };
+            const std::string& densType = S.base.densitometerType;
+            if (!densType.empty()) {
+                std::string rel = std::string("densitometer\\") + densType + "\\responsivity_";
+                rel.push_back(channel);
+                rel += ".csv";
+                if (try_load(rel)) {
+                    return out;
+                }
+            }
+
+            const std::string fallback = std::string("densitometer\\responsivity_") + channel + ".csv";
+            if (!try_load(fallback)) {
+                JTRACE("BUILD", std::string("unmix: failed to load responsivity for ") + channel);
+            }
             return out;
             };
-        std::vector<float> respB = load_resp("densitometer\\responsivity_b.csv");
-        std::vector<float> respG = load_resp("densitometer\\responsivity_g.csv");
-        std::vector<float> respR = load_resp("densitometer\\responsivity_r.csv");
+        std::vector<float> respB = load_resp('b');
+        std::vector<float> respG = load_resp('g');
+        std::vector<float> respR = load_resp('r');
 
         if ((int)respB.size() == Spectral::gShape.K &&
             (int)respG.size() == Spectral::gShape.K &&
