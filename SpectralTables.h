@@ -9,6 +9,7 @@ struct SpectralTables {
     int   K = 0;
     float deltaLambda = 5.0f;
     float invYn = 1.0f;
+    float whiteXYZ[3] = { 0.0f, 0.0f, 0.0f };
 
     // Illuminant-weighted CMFs (Ax, Ay, Az) and raw CMFs
     std::vector<float> Ax, Ay, Az;

@@ -421,8 +421,11 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                         else {
                             Spectral::dyes_to_XYZ_given_tables(*tables, D_cmy, XYZ);
                         }
-                        Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
-                    }                    
+                        Spectral::XYZ_to_DWG_linear_adapted(*tables, XYZ, rgbOut);
+                        rgbOut[0] = std::max(0.0f, rgbOut[0]);
+                        rgbOut[1] = std::max(0.0f, rgbOut[1]);
+                        rgbOut[2] = std::max(0.0f, rgbOut[2]);
+                    }
                 }
                 else {
                     // Spatial DIR path must continue from D_cmy to preserve blurred corrections.
@@ -506,7 +509,10 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     }
                     float XYZ[3];
                     Spectral::Ee_to_XYZ_given_tables(_ws->tablesView, Ee_viewed, XYZ);
-                    Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
+                    Spectral::XYZ_to_DWG_linear_adapted(_ws->tablesView, XYZ, rgbOut);
+                    rgbOut[0] = std::max(0.0f, rgbOut[0]);
+                    rgbOut[1] = std::max(0.0f, rgbOut[1]);
+                    rgbOut[2] = std::max(0.0f, rgbOut[2]);
                 }
 
                 // Write out (no pointer increments)

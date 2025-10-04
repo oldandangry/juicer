@@ -123,8 +123,11 @@ namespace Scanner {
             Spectral::dyes_to_XYZ_given_tables(*tables, D_cmy, XYZ);
         }
 
-        // XYZ → DWG + contrast
-        Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
+        // XYZ → DWG with chromatic adaptation based on the scan illuminant
+        Spectral::XYZ_to_DWG_linear_adapted(*tables, XYZ, rgbOut);
+        rgbOut[0] = std::max(0.0f, rgbOut[0]);
+        rgbOut[1] = std::max(0.0f, rgbOut[1]);
+        rgbOut[2] = std::max(0.0f, rgbOut[2]);
     }
 
 } // namespace Scanner

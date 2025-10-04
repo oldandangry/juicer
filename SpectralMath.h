@@ -1246,6 +1246,9 @@ namespace Spectral {
 
         const bool hasIll = (!illumView.linear.empty() && (int)illumView.linear.size() == K);
         double Yn = 0.0;
+        double sumAx = 0.0;
+        double sumAy = 0.0;
+        double sumAz = 0.0;
         for (int i = 0; i < K; ++i) {
             const float l = T.lambda[i];
 
@@ -1262,8 +1265,15 @@ namespace Spectral {
             T.Ay[i] = Ee * T.Ybar[i];
             T.Az[i] = Ee * T.Zbar[i];
             Yn += T.Ay[i];
+            sumAx += T.Ax[i];
+            sumAy += T.Ay[i];
+            sumAz += T.Az[i];
         }
         T.invYn = (Yn > 0.0) ? (1.0f / (float)Yn) : 1.0f;
+        const double scale = static_cast<double>(T.deltaLambda) * static_cast<double>(T.invYn);
+        T.whiteXYZ[0] = static_cast<float>(scale * sumAx);
+        T.whiteXYZ[1] = static_cast<float>(scale * sumAy);
+        T.whiteXYZ[2] = static_cast<float>(scale * sumAz);
 
         T.hasBaseline = hasBaseline &&
             (int)baseMin.linear.size() == K;
@@ -2090,6 +2100,98 @@ namespace Spectral {
        -0.46491710f,  1.25142378f,  0.17488461f,
         0.06484905f,  0.10913934f,  0.76141462f
     } };
+    //Bradford based chromatic adaptation
+    inline const float gDWG_WhitePoint_XYZ[3] = {
+        0.950455f, 1.0f, 1.089058f
+    };
+
+    inline void chromatic_adapt_XYZ_bradford(
+        const float XYZ[3],
+        const float srcWhiteXYZ[3],
+        const float dstWhiteXYZ[3],
+        float outXYZ[3])
+    {
+        static const float M[9] = {
+            0.8951000f,  0.2664000f, -0.1614000f,
+           -0.7502000f,  1.7135000f,  0.0367000f,
+            0.0389000f, -0.0685000f,  1.0296000f
+        };
+        static const float M_inv[9] = {
+            0.9869929f, -0.1470543f,  0.1599627f,
+            0.4323053f,  0.5183603f,  0.0492912f,
+           -0.0085287f,  0.0400428f,  0.9684867f
+        };
+
+        auto mul3 = [](const float m[9], const float v[3], float dst[3]) {
+            dst[0] = m[0] * v[0] + m[1] * v[1] + m[2] * v[2];
+            dst[1] = m[3] * v[0] + m[4] * v[1] + m[5] * v[2];
+            dst[2] = m[6] * v[0] + m[7] * v[1] + m[8] * v[2];
+            };
+
+        auto sanitize = [](float v) -> float {
+            return std::isfinite(v) ? std::max(0.0f, v) : 0.0f;
+            };
+
+        float srcWhite[3] = {
+            sanitize(srcWhiteXYZ[0]),
+            sanitize(srcWhiteXYZ[1]),
+            sanitize(srcWhiteXYZ[2])
+        };
+        float dstWhite[3] = {
+            sanitize(dstWhiteXYZ[0]),
+            sanitize(dstWhiteXYZ[1]),
+            sanitize(dstWhiteXYZ[2])
+        };
+
+        const float srcY = (srcWhite[1] > 0.0f) ? srcWhite[1] : 1.0f;
+        const float dstY = (dstWhite[1] > 0.0f) ? dstWhite[1] : 1.0f;
+        const float srcScale = 1.0f / srcY;
+        const float dstScale = 1.0f / dstY;
+        srcWhite[0] *= srcScale; srcWhite[1] = 1.0f; srcWhite[2] *= srcScale;
+        dstWhite[0] *= dstScale; dstWhite[1] = 1.0f; dstWhite[2] *= dstScale;
+
+        float srcLMS[3];
+        float dstLMS[3];
+        float XYZ_LMS[3];
+        mul3(M, srcWhite, srcLMS);
+        mul3(M, dstWhite, dstLMS);
+        mul3(M, XYZ, XYZ_LMS);
+
+        float scale[3];
+        scale[0] = (srcLMS[0] > 1e-6f) ? (dstLMS[0] / srcLMS[0]) : 1.0f;
+        scale[1] = (srcLMS[1] > 1e-6f) ? (dstLMS[1] / srcLMS[1]) : 1.0f;
+        scale[2] = (srcLMS[2] > 1e-6f) ? (dstLMS[2] / srcLMS[2]) : 1.0f;
+
+        float adaptedLMS[3] = {
+            scale[0] * XYZ_LMS[0],
+            scale[1] * XYZ_LMS[1],
+            scale[2] * XYZ_LMS[2]
+        };
+
+        mul3(M_inv, adaptedLMS, outXYZ);
+    }
+
+    inline void XYZ_to_DWG_linear_adapted(
+        const SpectralTables& tables,
+        const float XYZ[3],
+        float RGB[3])
+    {
+        float srcWhite[3] = {
+            tables.whiteXYZ[0],
+            tables.whiteXYZ[1],
+            tables.whiteXYZ[2]
+        };
+        const float sum = srcWhite[0] + srcWhite[1] + srcWhite[2];
+        if (!std::isfinite(sum) || sum <= 0.0f) {
+            srcWhite[0] = gDWG_WhitePoint_XYZ[0];
+            srcWhite[1] = gDWG_WhitePoint_XYZ[1];
+            srcWhite[2] = gDWG_WhitePoint_XYZ[2];
+        }
+
+        float adaptedXYZ[3];
+        chromatic_adapt_XYZ_bradford(XYZ, srcWhite, gDWG_WhitePoint_XYZ, adaptedXYZ);
+        gDWG_XYZ_to_RGB.mul(adaptedXYZ, RGB);
+    }
 
     inline void XYZ_to_DWG_linear(const float XYZ[3], float RGB[3]) {
         gDWG_XYZ_to_RGB.mul(XYZ, RGB);

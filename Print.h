@@ -914,8 +914,11 @@ namespace Print {
         float XYZ[3] = { 0,0,0 };
         Spectral::Ee_to_XYZ_given_tables(ws.tablesView, Ee_viewed, XYZ);
 
-        // XYZ → DWG
-        Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
+        // XYZ → DWG with chromatic adaptation
+        Spectral::XYZ_to_DWG_linear_adapted(ws.tablesView, XYZ, rgbOut);
+        rgbOut[0] = std::max(0.0f, rgbOut[0]);
+        rgbOut[1] = std::max(0.0f, rgbOut[1]);
+        rgbOut[2] = std::max(0.0f, rgbOut[2]);
 
         if (probe) {
             probe->Tneg = Tneg;
@@ -1068,8 +1071,11 @@ namespace Print {
         float XYZ[3];
         Spectral::Ee_to_XYZ_given_tables(ws.tablesView, Ee_viewed, XYZ);
 
-        // XYZ -> DWG
-        Spectral::XYZ_to_DWG_linear(XYZ, rgbOut);
+        // XYZ -> DWG with chromatic adaptation
+        Spectral::XYZ_to_DWG_linear_adapted(ws.tablesView, XYZ, rgbOut);
+        rgbOut[0] = std::max(0.0f, rgbOut[0]);
+        rgbOut[1] = std::max(0.0f, rgbOut[1]);
+        rgbOut[2] = std::max(0.0f, rgbOut[2]);
 
     }
 
