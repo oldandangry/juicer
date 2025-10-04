@@ -43,6 +43,7 @@
 #include "Illuminants.h"
 #include <sstream> // for diagnostics
 #include <array>
+#include <algorithm>
 #include "Scanner.h"
 #include "Print.h"
 #include "WorkingState.h"
@@ -391,6 +392,26 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
     Spectral::sort_and_build(S.base.densB, dc_b);
     Spectral::sort_and_build(S.base.densG, dc_g);
     Spectral::sort_and_build(S.base.densR, dc_r);
+
+    // Remove per-channel baseline floor (B+F) from density curves once up-front
+    auto subtract_baseline_floor = [](Spectral::Curve& curve) {
+        if (curve.linear.empty()) return;
+        float minVal = FLT_MAX;
+        for (float v : curve.linear) {
+            if (std::isfinite(v) && v < minVal) {
+                minVal = v;
+            }
+        }
+        if (!std::isfinite(minVal) || minVal == FLT_MAX || minVal == 0.0f) {
+            return;
+        }
+        for (float& v : curve.linear) {
+            v = std::max(0.0f, v - minVal);
+        }
+        };
+    subtract_baseline_floor(S.base.densB);
+    subtract_baseline_floor(S.base.densG);
+    subtract_baseline_floor(S.base.densR);
 
     Spectral::build_curve_on_shape_from_linear_pairs(S.base.baseMin, dmin);
     Spectral::build_curve_on_shape_from_linear_pairs(S.base.baseMid, dmid);
