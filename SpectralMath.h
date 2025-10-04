@@ -58,27 +58,24 @@ namespace Spectral {
         const Curve& sB, const Curve& sG, const Curve& sR,
         float E[3], float exposureScale);
 
+    struct DirRuntimeSnapshot {
+        bool active = false;
+        float M[3][3] = { {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
+        float highShift = 0.0f;
+        float dMax[3] = { 1.0f, 1.0f, 1.0f };
+    };
 
-    // -----------------------------------------------------------------------------
-    // DIR coupler hook — default no‑op
-    // In agx‑emulsion, this adjusts per‑dye densities based on interlayer coupler effects.
-    // Here we just leave densities unchanged.
-    // D[0] = Yellow dye density (from blue layer)
-    // D[1] = Magenta dye density (from green layer)
-    // D[2] = Cyan dye density (from red layer)
-    // E[0..2] = layer exposures (logE or linear, depending on your pipeline)
-    // -----------------------------------------------------------------------------
-    inline void apply_dir_couplers(float D[3], const float E_in[3]) {
 #ifdef JUICER_ENABLE_COUPLERS
-        // We only define the call site here; the actual param fetch is done at the effect layer.
-        // So keep this as a no-op and use the runtime hook inside density_curve_rgb_dwg.
-        (void)D; (void)E_in;
-#else
-        (void)D; (void)E_in;
-#endif
+    inline DirRuntimeSnapshot gDirRuntimeSnapshot{};
+    inline void set_dir_runtime_snapshot(const DirRuntimeSnapshot& snap) {
+        gDirRuntimeSnapshot = snap;
     }
-
-
+#else
+    inline DirRuntimeSnapshot gDirRuntimeSnapshot{};
+    inline void set_dir_runtime_snapshot(const DirRuntimeSnapshot&) {}
+#endif
+    
+    inline void apply_dir_couplers(float D[3], const float E_in[3]);
 
     // Mark tables dirty (call when any spectral input that affects tables changes)
     inline void mark_spectral_tables_dirty() {
@@ -148,14 +145,7 @@ namespace Spectral {
         for (int i = 1; i < s.K; ++i) sum += static_cast<double>(s.wavelengths[i] - s.wavelengths[i - 1]);
         const double mean = sum / static_cast<double>(s.K - 1);
         return (mean > 0.0) ? static_cast<float>(mean) : kDelta;
-    }
-
-
-    // Effective sensitivity gains (computed in precompute)
-    // Store per-layer correction so neutral exposures match green under the viewing illuminant.
-    inline float gSensCorrB = 1.0f;
-    inline float gSensCorrG = 1.0f;
-    inline float gSensCorrR = 1.0f;
+    }    
 
     // Forward declaration because precompute_spectral_tables() calls it
     inline float illuminant_E(float lambda);
@@ -1186,31 +1176,8 @@ namespace Spectral {
         }
 
         gYnNorm = (Yn > 0.0f) ? Yn : 1.0f;
-        gInvYn = 1.0f / gYnNorm;
-
-        // Per-layer neutral exposures under current illuminant Ee
-        auto neutral_exposure = [&](const Curve& sens) -> float {
-            if (sens.lambda_nm.empty()) return 1.0f;
-            double num = 0.0;
-            double den = 0.0;
-            for (int i = 0; i < gShape.K; ++i) {
-                const float Ee = gIllumTable[i];
-                const float s = sens.sample(gLambda[i]);
-                num += static_cast<double>(Ee) * static_cast<double>(s);
-                den += static_cast<double>(Ee);
-            }
-            return (den > 0.0) ? static_cast<float>(num / den) : 1.0f;
-            };
-
-        const float nB = neutral_exposure(gSensBlue);
-        const float nG = neutral_exposure(gSensGreen);
-        const float nR = neutral_exposure(gSensRed);
-
-        gSensCorrB = (nB > 0.0f) ? (nG / nB) : 1.0f;
-        gSensCorrG = 1.0f;
-        gSensCorrR = (nR > 0.0f) ? (nG / nR) : 1.0f;
+        gInvYn = 1.0f / gYnNorm;        
     }
-
 
     inline float baseline_density(float lambda, float w) {
         if (!gHasBaseline) return 0.0f;
@@ -1367,8 +1334,7 @@ namespace Spectral {
     // --- Forward declarations to satisfy helper below ---
     extern bool gUseSPDExposure; // defined later as inline variable
 
-    inline void rgbDWG_to_layerExposures(const float rgbDWG[3], float E[3], float exposureScale);
-    inline void applyLayerSensitivityBalance(float E[3]);
+    inline void rgbDWG_to_layerExposures(const float rgbDWG[3], float E[3], float exposureScale);    
     inline void layerExposures_from_sceneSPD(const std::vector<float>& Ee, float E[3], float exposureScale);
 
 
@@ -1384,8 +1350,7 @@ namespace Spectral {
         const bool spdOk = useSPDExposure && T && S_inv && T->K > 0;
 
         if (!spdOk) {
-            rgbDWG_to_layerExposures(rgbDWG, E, exposureScale);
-            applyLayerSensitivityBalance(E);
+            rgbDWG_to_layerExposures(rgbDWG, E, exposureScale);            
             return;
         }
 
@@ -1412,8 +1377,7 @@ namespace Spectral {
     {
         const bool spdOk = useSPDExposure && T && S_inv && T->K > 0;
         if (!spdOk) {
-            rgbDWG_to_layerExposures(rgbDWG, E, exposureScale);
-            applyLayerSensitivityBalance(E);
+            rgbDWG_to_layerExposures(rgbDWG, E, exposureScale);            
             return;
         }
 
@@ -1567,15 +1531,7 @@ namespace Spectral {
             den += Ee;
         }
         return (den > 0.0f) ? (num / den) : 1.0f;
-    }
-
-
-
-    inline void applyLayerSensitivityBalance(float E[3]) {
-        E[0] *= gSensCorrB; // blue layer -> yellow dye
-        E[1] *= gSensCorrG; // green layer -> magenta dye
-        E[2] *= gSensCorrR; // red layer -> cyan dye
-    }
+    }    
 
     // -------------------------------------------------------------------------
     // DaVinci Wide Gamut linear RGB <-> CIE 1931 XYZ (official, DWG linear)
@@ -1703,8 +1659,7 @@ namespace Spectral {
     // Compute E from DWG via either matrix mapping (current path) or SPD integration (new path)
     inline void rgbDWG_to_layerExposures_flex(const float rgbDWG[3], float E[3], float exposureScale) {
         if (!gUseSPDExposure) {
-            rgbDWG_to_layerExposures(rgbDWG, E, exposureScale);
-            applyLayerSensitivityBalance(E);
+            rgbDWG_to_layerExposures(rgbDWG, E, exposureScale);            
             return;
         }
 
@@ -1805,6 +1760,109 @@ namespace Spectral {
         const float y0 = c.linear[i0], y1 = c.linear[i1];
         const float t = (logE - x0) / (x1 - x0);
         return y0 + t * (y1 - y0);
+    }
+
+    inline void apply_dir_couplers(float D[3], const float E_in[3]) {
+#ifdef JUICER_ENABLE_COUPLERS
+        const DirRuntimeSnapshot& rt = gDirRuntimeSnapshot;
+        if (!rt.active) {
+            return;
+        }
+
+        // Require valid density curves and normalization constants.
+        if (gDensityCurveB.lambda_nm.empty() || gDensityCurveG.lambda_nm.empty() || gDensityCurveR.lambda_nm.empty()) {
+            return;
+        }
+
+        auto clamp_to_curve = [](float le, const Curve& c) -> float {
+            if (c.lambda_nm.empty()) return le;
+            const float xmin = c.lambda_nm.front();
+            const float xmax = c.lambda_nm.back();
+            if (!std::isfinite(le)) return xmin;
+            if (le < xmin) return xmin;
+            if (le > xmax) return xmax;
+            return le;
+            };
+
+        auto safe_norm = [](float val, float maxVal) -> float {
+            float m = (std::isfinite(maxVal) && maxVal > 1e-4f) ? maxVal : 1.0f;
+            float v = (!std::isfinite(val) || val < 0.0f) ? 0.0f : val;
+            float n = v / m;
+            if (!std::isfinite(n)) n = 0.0f;
+            if (n < 0.0f) n = 0.0f;
+            if (n > 1.0f) n = 1.0f;
+            return n;
+            };
+
+        auto high_boost = [&](float n) -> float {
+            n = std::clamp(n, 0.0f, 1.0f);
+            float boosted = n + rt.highShift * n * n;
+            if (!std::isfinite(boosted)) boosted = n;
+            return std::clamp(boosted, 0.0f, 1.0f);
+            };
+
+        auto clamp_corr = [](float v) -> float {
+            if (!std::isfinite(v)) return 0.0f;
+            if (v < -10.0f) return -10.0f;
+            if (v > 10.0f) return 10.0f;
+            return v;
+            };
+
+        const float logEOffsets[3] = {
+            gDensityCurveLogEOffsetB,
+            gDensityCurveLogEOffsetG,
+            gDensityCurveLogEOffsetR
+        };
+
+        float logE_raw[3];
+        for (int i = 0; i < 3; ++i) {
+            const float Ein = E_in[i];
+            const float safeE = (std::isfinite(Ein) && Ein > 0.0f) ? Ein : 1e-6f;
+            logE_raw[i] = std::log10(std::max(safeE, 1e-6f)) + logEOffsets[i];
+        }
+
+        float logE_clamped[3] = {
+            clamp_to_curve(logE_raw[0], gDensityCurveB),
+            clamp_to_curve(logE_raw[1], gDensityCurveG),
+            clamp_to_curve(logE_raw[2], gDensityCurveR)
+        };
+
+        float D_sampled[3] = {
+            sample_density_at_logE(gDensityCurveB, logE_clamped[0]),
+            sample_density_at_logE(gDensityCurveG, logE_clamped[1]),
+            sample_density_at_logE(gDensityCurveR, logE_clamped[2])
+        };
+
+        float nB = high_boost(safe_norm(D_sampled[0], rt.dMax[0]));
+        float nG = high_boost(safe_norm(D_sampled[1], rt.dMax[1]));
+        float nR = high_boost(safe_norm(D_sampled[2], rt.dMax[2]));
+
+        float corrY = rt.M[0][0] * nB + rt.M[1][0] * nG + rt.M[2][0] * nR;
+        float corrM = rt.M[0][1] * nB + rt.M[1][1] * nG + rt.M[2][1] * nR;
+        float corrC = rt.M[0][2] * nB + rt.M[1][2] * nG + rt.M[2][2] * nR;
+
+        corrY = clamp_corr(corrY);
+        corrM = clamp_corr(corrM);
+        corrC = clamp_corr(corrC);
+
+        float logE_corrected[3] = {
+            clamp_to_curve(logE_raw[0] - corrY, gDensityCurveB),
+            clamp_to_curve(logE_raw[1] - corrM, gDensityCurveG),
+            clamp_to_curve(logE_raw[2] - corrC, gDensityCurveR)
+        };
+
+        D[0] = sample_density_at_logE(gDensityCurveB, logE_corrected[0]);
+        D[1] = sample_density_at_logE(gDensityCurveG, logE_corrected[1]);
+        D[2] = sample_density_at_logE(gDensityCurveR, logE_corrected[2]);
+
+        for (int i = 0; i < 3; ++i) {
+            if (!std::isfinite(D[i]) || D[i] < 0.0f) {
+                D[i] = 0.0f;
+            }
+        }
+#else
+        (void)D; (void)E_in;
+#endif
     }
 
     // Balance negative sensitivities and density curves under a given reference illuminant.
