@@ -79,8 +79,7 @@ namespace Profiles {
                 const Json& mid = info["density_midscale_neutral"];
                 outProfile.densityMidNeutral.clear();
                 if (mid.is_array()) {
-                    for (const auto& v : mid) {
-                        float val = value_or_default(v, std::numeric_limits<float>::quiet_NaN());
+                    for (const auto& v : mid) {                        
                         if (auto val = parse_optional_float(v)) {
                             outProfile.densityMidNeutral.push_back(*val);
                         }
