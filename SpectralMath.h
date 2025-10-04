@@ -35,9 +35,8 @@ namespace Spectral {
     // SpectralMath.h (near the top, inside namespace Spectral, before any use)
     struct BaselineCtx {
         bool hasBaseline;
-        float w;
-        const float* baseMin;
-        const float* baseMid;
+        const float* base;
+        float scale;
     };
 
 #if defined(__AVX2__)
@@ -1267,11 +1266,15 @@ namespace Spectral {
         T.invYn = (Yn > 0.0) ? (1.0f / (float)Yn) : 1.0f;
 
         T.hasBaseline = hasBaseline &&
-            (int)baseMin.linear.size() == K &&
-            (int)baseMid.linear.size() == K;
+            (int)baseMin.linear.size() == K;
         if (T.hasBaseline) {
             T.baseMin = baseMin.linear;
-            T.baseMid = baseMid.linear;
+            if ((int)baseMid.linear.size() == K) {
+                T.baseMid = baseMid.linear;
+            }
+            else {
+                T.baseMid.assign(K, 0.0f);
+            }
         }
         else {
             T.baseMin.assign(K, 0.0f);
@@ -1442,16 +1445,14 @@ namespace Spectral {
 
     inline void dyes_to_XYZ_with_baseline_given_tables(
         const SpectralTables& T,
-        const float dyes[3],
-        float neutralW,
+        const float dyes[3],        
         float XYZ[3])
-    {
-        const float w = std::clamp(neutralW, 0.0f, 1.0f);
+    {        
         double X = 0.0, Y = 0.0, Z = 0.0;
         const int K = T.K;
         for (int i = 0; i < K; ++i) {
             const float baseSpectral = T.hasBaseline
-                ? (T.baseMin[i] + w * (T.baseMid[i] - T.baseMin[i]))
+                ? T.baseMin[i]
                 : 0.0f;
             const float Dlambda = dyes[0] * T.epsY[i]
                 + dyes[1] * T.epsM[i]
@@ -2013,9 +2014,8 @@ namespace Spectral {
     inline void dyes_to_XYZ_given_Ee(const float* dyes, float XYZ[3]) {
         BaselineCtx base;
         base.hasBaseline = false;
-        base.w = 0.0f;
-        base.baseMin = nullptr;
-        base.baseMid = nullptr;
+        base.base = nullptr;
+        base.scale = 0.0f;
 
 #if defined(__AVX2__)
         integrate_dyes_to_XYZ_avx2(
@@ -2046,9 +2046,8 @@ namespace Spectral {
     inline void dyes_to_XYZ_given_Ee_with_baseline(const float* dyes, float neutralW, float XYZ[3]) {
         BaselineCtx base;
         base.hasBaseline = gHasBaseline;
-        base.w = std::clamp(neutralW, 0.0f, 1.0f);
-        base.baseMin = gBaselineMinTable.data();
-        base.baseMid = gBaselineMidTable.data();
+        base.base = gBaselineMinTable.data();
+        base.scale = 1.0f;
 
 #if defined(__AVX2__)
         integrate_dyes_to_XYZ_avx2(
@@ -2060,8 +2059,8 @@ namespace Spectral {
         double X = 0.0, Y = 0.0, Z = 0.0;
         const int K = gShape.K;
         for (int i = 0; i < K; ++i) {
-            const float baseSpectral = gHasBaseline
-                ? (gBaselineMinTable[i] + base.w * (gBaselineMidTable[i] - gBaselineMinTable[i]))
+            const float baseSpectral = (base.hasBaseline && base.base)
+                ? (base.scale * base.base[i])
                 : 0.0f;
 
             const float Dlambda = dyes[0] * gEpsYTable[i]
@@ -2123,13 +2122,10 @@ namespace Spectral {
         // 2) Use over‑B+F curves directly; baseline is added spectrally at integration time.
         float D[3] = { D_curve_over_BF[0], D_curve_over_BF[1], D_curve_over_BF[2] };        
 
-        // 3) Neutral blend weight.
-        const float w = neutral_blend_weight_from_DWG_rgb(rgbIn);
-
-        // 4) Integrate under Ee_view using per-call normalization above.
+        // 3) Integrate under Ee_view using per-call normalization above.
         float XYZ[3];
         if (gHasBaseline) {
-            dyes_to_XYZ_given_Ee_with_baseline(D, w, XYZ);
+            dyes_to_XYZ_given_Ee_with_baseline(D, XYZ);
         }
         else {
             dyes_to_XYZ_given_Ee(D, XYZ);

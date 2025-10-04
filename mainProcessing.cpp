@@ -414,8 +414,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     if (tables) {
                         float XYZ[3] = { 0.0f, 0.0f, 0.0f };
                         if (_ws->hasBaseline && tables->hasBaseline) {
-                            const float w = Spectral::neutral_blend_weight_from_DWG_rgb(rgbIn);
-                            Spectral::dyes_to_XYZ_with_baseline_given_tables(*tables, D_cmy, w, XYZ);
+                            Spectral::dyes_to_XYZ_with_baseline_given_tables(*tables, D_cmy, XYZ);
                         }
                         else {
                             Spectral::dyes_to_XYZ_given_tables(*tables, D_cmy, XYZ);
@@ -425,11 +424,10 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 }
                 else {
                     // Spatial DIR path must continue from D_cmy to preserve blurred corrections.
-                    const float wNeutral = Spectral::neutral_blend_weight_from_DWG_rgb(rgbIn);
                     thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
 
                     // 1) Negative transmittance from corrected densities
-                    Print::negative_T_from_dyes(*_ws, D_cmy, Tneg, wNeutral);
+                    Print::negative_T_from_dyes(*_ws, D_cmy, Tneg);
 
                     // Per-instance spectral shape to avoid global races and size mismatches
                     const int K = _ws->tablesView.K;

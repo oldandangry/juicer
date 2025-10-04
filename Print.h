@@ -460,8 +460,7 @@ namespace Print {
     // Compute negative transmittance T_neg(λ) from over-B+F densities D_neg using per-instance data
     inline void negative_T_from_dyes(const WorkingState& ws,
         const float D_neg[3],
-        std::vector<float>& Tneg_out,
-        float neutralW = 0.0f)
+        std::vector<float>& Tneg_out)
     {
         // Use the instance's spectral length; do NOT gate off gShape here.
         const int K = ws.tablesView.K;
@@ -470,8 +469,7 @@ namespace Print {
 
         // Per-instance baseline (if available)
         const bool hasBL = ws.hasBaseline &&
-            (int)ws.baseMin.linear.size() == K &&
-            (int)ws.baseMid.linear.size() == K;
+            (int)ws.baseMin.linear.size() == K;
 
         // Access per-wavelength epsilon for Y/M/C negative dyes; lambdas fallback to 0 if missing.
         auto epsY_at = [&](int i)->float {
@@ -486,7 +484,7 @@ namespace Print {
 
         for (int i = 0; i < K; ++i) {
             const float baseSpectral = hasBL
-                ? (ws.baseMin.linear[i] + neutralW * (ws.baseMid.linear[i] - ws.baseMin.linear[i]))
+                ? ws.baseMin.linear[i]
                 : 0.0f;
 
             const float Dlambda = D_neg[0] * epsY_at(i)
@@ -603,10 +601,9 @@ namespace Print {
             Spectral::sample_density_at_logE(ws.densR, logE_clamped[2]),
         };
 
-        // 4) Negative transmittance (baseline neutral blend)
-        const float wNeutral = Spectral::neutral_blend_weight_from_DWG_rgb(rgbMid);
+        // 4) Negative transmittance (baseline applied per stock)        
         thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered;
-        negative_T_from_dyes(ws, D_neg, Tneg, wNeutral);
+        negative_T_from_dyes(ws, D_neg, Tneg);
 
         // 5) Enlarger illuminant exposure
         Ee_expose.resize(Spectral::gShape.K);
@@ -857,11 +854,9 @@ namespace Print {
             Spectral::sample_density_at_logE(ws.densR, leR)  // C from R-layer curve
         };
 
-        // 2) Negative transmittance with baseline blend
-        const float rgbInDummy[3] = { 0.5f, 0.5f, 0.5f }; // used only for neutral weight
-        const float wNeutral = Spectral::neutral_blend_weight_from_DWG_rgb(rgbInDummy);
+        // 2) Negative transmittance with per-stock baseline        
         thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
-        negative_T_from_dyes(ws, D_neg, Tneg, wNeutral);
+        negative_T_from_dyes(ws, D_neg, Tneg);
 
         // 3) Enlarger exposure (neutral illuminant here; print exposure happens later on RAW)
         Ee_expose.resize(Spectral::gShape.K);
@@ -1004,10 +999,9 @@ namespace Print {
                 }
 #endif
 
-        // 2) Negative transmittance with optional baseline blend
-        const float wNeutral = Spectral::neutral_blend_weight_from_DWG_rgb(rgbIn);
+        // 2) Negative transmittance with optional baseline blend        
         thread_local std::vector<float> Tneg, Ee_expose, Tprint, Ee_viewed;
-        negative_T_from_dyes(ws, D_neg, Tneg, wNeutral);
+        negative_T_from_dyes(ws, D_neg, Tneg);
 
         // 3) Ee_expose = Ee_enlarger * T_neg * exposure
         Ee_expose.resize(Spectral::gShape.K);

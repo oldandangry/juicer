@@ -115,8 +115,7 @@ namespace Scanner {
 
         float XYZ[3] = { 0.0f, 0.0f, 0.0f };
         if (ws.hasBaseline && tables->hasBaseline) {
-            const float w = Spectral::neutral_blend_weight_from_DWG_rgb(rgbIn);
-            Spectral::dyes_to_XYZ_with_baseline_given_tables(*tables, D_cmy, w, XYZ);
+            Spectral::dyes_to_XYZ_with_baseline_given_tables(*tables, D_cmy, XYZ);
         }
         else {
             Spectral::dyes_to_XYZ_given_tables(*tables, D_cmy, XYZ);

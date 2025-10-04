@@ -394,7 +394,7 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
 
     Spectral::build_curve_on_shape_from_linear_pairs(S.base.baseMin, dmin);
     Spectral::build_curve_on_shape_from_linear_pairs(S.base.baseMid, dmid);
-    S.base.hasBaseline = !S.base.baseMin.linear.empty() && !S.base.baseMid.linear.empty();
+    S.base.hasBaseline = !S.base.baseMin.linear.empty();
 
     {
         std::ostringstream oss;
@@ -1166,8 +1166,7 @@ public:
             ws->tablesView.epsY.size() == static_cast<size_t>(Spectral::gShape.K) &&
             ws->tablesView.epsM.size() == static_cast<size_t>(Spectral::gShape.K) &&
             ws->tablesView.epsC.size() == static_cast<size_t>(Spectral::gShape.K) &&
-            ws->baseMin.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&
-            ws->baseMid.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&
+            ws->baseMin.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&            
             !ws->densB.lambda_nm.empty() && !ws->densB.linear.empty() &&
             !ws->densG.lambda_nm.empty() && !ws->densG.linear.empty() &&
             !ws->densR.lambda_nm.empty() && !ws->densR.linear.empty());
@@ -1419,11 +1418,10 @@ private:
         D_neg[1] = Spectral::sample_density_at_logE(ws->densG, logE_clamped[1]); // M
         D_neg[2] = Spectral::sample_density_at_logE(ws->densR, logE_clamped[2]); // C
 
-        const float wNeutral = Spectral::neutral_blend_weight_from_DWG_rgb(rgbMid);
         std::vector<float> Tneg, Ee_expose, Ee_filtered;
 
         // Negative T from dyes (baseline included by ws.hasBaseline)
-        Print::negative_T_from_dyes(*ws, D_neg, Tneg, wNeutral);
+        Print::negative_T_from_dyes(*ws, D_neg, Tneg);
 
         // Enlarger illuminant exposure
         Ee_expose.resize(Spectral::gShape.K);
