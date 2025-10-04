@@ -202,7 +202,7 @@ namespace Spectral {
             linear.reserve(s.size());
             for (auto& p : s) {
                 lambda_nm.push_back(p.first);
-                linear.push_back(std::max(0.0f, p.second));
+                linear.push_back(p.second);
             }
         }
 
@@ -250,7 +250,7 @@ namespace Spectral {
         std::sort(sorted.begin(), sorted.end(), [](auto& a, auto& b) { return a.first < b.first; });
         for (int i = 0; i < s.K; ++i) {
             const float l = s.wavelengths[i];
-            const float v = std::max(0.0f, sample_linear_pairs(sorted, l));
+            const float v = sample_linear_pairs(sorted, l);
             out.emplace_back(l, v);
         }
         return out;
@@ -267,7 +267,7 @@ namespace Spectral {
         curve.linear.reserve(res.size());
         for (auto& p : res) {
             curve.lambda_nm.push_back(p.first);
-            curve.linear.push_back(std::max(0.0f, p.second));
+            curve.linear.push_back(p.second);
         }
     }
 
