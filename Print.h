@@ -568,9 +568,11 @@ namespace Print {
         // 2) DWG → per-layer exposures (negative leg); apply camera EV exactly once here.
         //    NOTE: Do not pre-scale rgbMid by cameraExposureScale — avoids double-applying EV.
         float E[3];
+        const SpectralTables* tablesSPD =
+            (ws.spdReady && ws.tablesRef.K > 0) ? &ws.tablesRef : nullptr;
         Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
             rgbMid, E, 1.0f,
-            (ws.tablesView.K > 0 ? &ws.tablesView : nullptr),
+            tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
             (int)std::clamp(ws.spectralMode, 0, 1),
             (ws.exposureModel == 1) && ws.spdReady,
@@ -942,9 +944,11 @@ namespace Print {
     {
         // 1) Negative densities with DIR in logE domain (per-instance SPD vs Matrix)
         float E[3];
+        const SpectralTables* tablesSPD =
+            (ws.spdReady && ws.tablesRef.K > 0) ? &ws.tablesRef : nullptr;
         Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
             rgbIn, E, 1.0f,
-            (ws.tablesView.K > 0 ? &ws.tablesView : nullptr),
+            tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
             (int)std::clamp(ws.spectralMode, 0, 1),
             (ws.exposureModel == 1) && ws.spdReady,

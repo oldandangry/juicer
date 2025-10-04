@@ -46,6 +46,9 @@ struct WorkingState {
     // Per-instance precomputed spectral tables for the viewing illuminant
     SpectralTables tablesView;
 
+    // Per-instance spectral tables for the film reference illuminant (SPD reconstruction)
+    SpectralTables tablesRef;
+
     // Per-instance spectral tables for scanner/negative viewing (D50 parity)
     SpectralTables tablesScan;
 

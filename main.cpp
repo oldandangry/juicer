@@ -464,6 +464,8 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
     Spectral::Curve densR = S.base.densR;
     Spectral::Curve baseMin = S.base.baseMin;
     Spectral::Curve baseMid = S.base.baseMid;
+    Spectral::Curve illumRef; // film reference illuminant used for SPD reconstruction
+    bool hasRefIlluminant = false;
     const bool hasBaseline = S.base.hasBaseline;
 
     // 1) Optional unmix BEFORE balance (non-destructive)
@@ -550,6 +552,9 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
     {
         Print::Runtime tmpRT;
         Print::build_illuminant_from_choice(P.refIll, tmpRT, S.dataDir, /*forEnlarger*/false);
+        illumRef = tmpRT.illumView;
+        hasRefIlluminant =
+            (!illumRef.linear.empty() && (int)illumRef.linear.size() == Spectral::gShape.K);
         Spectral::Curve sensB_bal, sensG_bal, sensR_bal;
         Spectral::Curve densB_bal, densG_bal, densR_bal;
         Spectral::balance_negative_under_reference_non_global(
@@ -689,6 +694,19 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         /*baseMin*/ baseMin, /*baseMid*/ baseMid, /*hasBaseline*/ hasBaseline,
         target->tablesView);
 
+    // Build per-instance spectral tables for the film reference illuminant (SPD reconstruction)
+    if (hasRefIlluminant) {
+        Spectral::build_tables_from_curves_non_global(
+            /*epsY*/ epsY, /*epsM*/ epsM, /*epsC*/ epsC,
+            /*xbar*/ Spectral::gXBar, /*ybar*/ Spectral::gYBar, /*zbar*/ Spectral::gZBar,
+            /*illumView*/ illumRef,
+            /*baseMin*/ baseMin, /*baseMid*/ baseMid, /*hasBaseline*/ hasBaseline,
+            target->tablesRef);
+    }
+    else {
+        target->tablesRef = SpectralTables{};
+    }
+
     // Build scanner tables using film-negative viewing illuminant (AgX parity uses D50)
     Spectral::Curve illumScan = Spectral::build_curve_D50_pinned(S.dataDir + "Illuminants\\D50.csv");
     Spectral::build_tables_from_curves_non_global(
@@ -699,8 +717,13 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         target->tablesScan);
 
     // Compute per-instance SPD S^-1 for reconstruction
-    Spectral::compute_S_inverse_from_tables(target->tablesView, target->spdSInv);
-    target->spdReady = true;
+    if (hasRefIlluminant && target->tablesRef.K > 0) {
+        Spectral::compute_S_inverse_from_tables(target->tablesRef, target->spdSInv);
+        target->spdReady = true;
+    }
+    else {
+        target->spdReady = false;
+    }
 
     // Calibrate print profile per-channel logE offsets to viewing axis (agx parity)
     if (Print::profile_is_valid(S.printRT.profile)) {
@@ -714,14 +737,25 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         JTRACE("BUILD", oss.str());
     }
 
-    if (target->tablesView.K <= 0 || !target->spdReady) {
-        JTRACE("BUILD", "tablesView or spdSInv not ready; will cause wsReady=0 in render.");
+    if (target->tablesView.K <= 0) {
+        JTRACE("BUILD", "tablesView not ready; will cause wsReady=0 in render.");
+    }
+    if (hasRefIlluminant) {
+        if (!target->spdReady || target->tablesRef.K <= 0) {
+            JTRACE("BUILD", "tablesRef or spdSInv not ready; SPD exposure disabled.");
+        }
+    }
+    else {
+        JTRACE("BUILD", "reference illuminant missing; SPD exposure disabled.");
     }
 
     {
         std::ostringstream oss;
         oss << "tablesView K=" << target->tablesView.K
             << " invYn=" << target->tablesView.invYn
+            << " tablesRef K=" << target->tablesRef.K
+            << " invYnRef=" << target->tablesRef.invYn
+            << " hasRefIll=" << (hasRefIlluminant ? 1 : 0)
             << " spdReady=" << (target->spdReady ? 1 : 0);
         JTRACE("BUILD", oss.str());
     }
@@ -747,7 +781,8 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         const bool ok_base = finiteCurve(baseMin) && finiteCurve(baseMid);
         const bool ok_tables =
             (target->tablesView.K == Spectral::gShape.K) &&
-            (target->tablesScan.K == Spectral::gShape.K);
+            (target->tablesScan.K == Spectral::gShape.K) &&
+            (!target->spdReady || target->tablesRef.K == Spectral::gShape.K);
 
         std::ostringstream oss;
         oss << "pre-Ecal: ok_dens=" << (ok_dens ? 1 : 0)
@@ -771,7 +806,8 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         }
         const bool ok_invYn =
             std::isfinite(target->tablesView.invYn) && target->tablesView.invYn > 0.0f &&
-            std::isfinite(target->tablesScan.invYn) && target->tablesScan.invYn > 0.0f;
+            std::isfinite(target->tablesScan.invYn) && target->tablesScan.invYn > 0.0f &&
+            (!target->spdReady || (std::isfinite(target->tablesRef.invYn) && target->tablesRef.invYn > 0.0f));
 
         std::ostringstream oss;
         oss << "pre-Ecal: ok_spd=" << (ok_spd ? 1 : 0)

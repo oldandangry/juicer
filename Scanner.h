@@ -52,9 +52,11 @@ namespace Scanner {
 
         // DWG → layer exposures (per-instance SPD vs Matrix, no global toggle)
         float E[3];
+        const SpectralTables* tablesSPD =
+            (ws.spdReady && ws.tablesRef.K > 0) ? &ws.tablesRef : nullptr;
         Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
             rgbIn, E, exposureScale,
-            (ws.tablesView.K > 0 ? &ws.tablesView : nullptr),
+            tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
             (int)std::clamp(ws.spectralMode, 0, 1),
             (ws.exposureModel == 1) && ws.spdReady,
