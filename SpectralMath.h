@@ -2100,26 +2100,26 @@ namespace Spectral {
        -0.46491710f,  1.25142378f,  0.17488461f,
         0.06484905f,  0.10913934f,  0.76141462f
     } };
-    //Bradford based chromatic adaptation
+    //CAT02/Von Kries based chromatic adaptation (matches colour.XYZ_to_RGB default)
     inline const float gDWG_WhitePoint_XYZ[3] = {
         0.950455f, 1.0f, 1.089058f
     };
 
-    inline void chromatic_adapt_XYZ_bradford(
+    inline void chromatic_adapt_XYZ_CAT02(
         const float XYZ[3],
         const float srcWhiteXYZ[3],
         const float dstWhiteXYZ[3],
         float outXYZ[3])
     {
         static const float M[9] = {
-            0.8951000f,  0.2664000f, -0.1614000f,
-           -0.7502000f,  1.7135000f,  0.0367000f,
-            0.0389000f, -0.0685000f,  1.0296000f
+             0.7328000f,  0.4296000f, -0.1624000f,
+            -0.7036000f,  1.6975000f,  0.0061000f,
+             0.0030000f,  0.0136000f,  0.9834000f
         };
         static const float M_inv[9] = {
-            0.9869929f, -0.1470543f,  0.1599627f,
-            0.4323053f,  0.5183603f,  0.0492912f,
-           -0.0085287f,  0.0400428f,  0.9684867f
+            1.0961238f, -0.2788690f,  0.1827452f,
+            0.4543690f,  0.4735332f,  0.0720978f,
+           -0.0096276f, -0.0056980f,  1.0153256f
         };
 
         auto mul3 = [](const float m[9], const float v[3], float dst[3]) {
@@ -2189,7 +2189,7 @@ namespace Spectral {
         }
 
         float adaptedXYZ[3];
-        chromatic_adapt_XYZ_bradford(XYZ, srcWhite, gDWG_WhitePoint_XYZ, adaptedXYZ);
+        chromatic_adapt_XYZ_CAT02(XYZ, srcWhite, gDWG_WhitePoint_XYZ, adaptedXYZ);
         gDWG_XYZ_to_RGB.mul(adaptedXYZ, RGB);
     }
 
