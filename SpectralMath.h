@@ -1386,8 +1386,7 @@ namespace Spectral {
             reconstruct_Ee_from_DWG_RGB_with_tables(rgbDWG, *T, S_inv, Ee_scene);
         }
 
-        layerExposures_from_sceneSPD(Ee_scene, E, exposureScale);
-        applyLayerSensitivityBalance(E);
+        layerExposures_from_sceneSPD(Ee_scene, E, exposureScale);        
     }
 
     // Per-instance SPD exposure using per-instance sensitivity curves
@@ -1416,8 +1415,7 @@ namespace Spectral {
         }
 
         // Integrate with per-instance sensitivity curves (no globals)
-        layerExposures_from_sceneSPD_with_curves(Ee_scene, sB, sG, sR, E, exposureScale);
-        applyLayerSensitivityBalance(E);
+        layerExposures_from_sceneSPD_with_curves(Ee_scene, sB, sG, sR, E, exposureScale);        
     }
 
 
@@ -1709,8 +1707,7 @@ namespace Spectral {
         else {
             reconstruct_Ee_from_DWG_RGB(rgbDWG, Ee_scene);
         }
-        layerExposures_from_sceneSPD(Ee_scene, E, exposureScale);
-        applyLayerSensitivityBalance(E);
+        layerExposures_from_sceneSPD(Ee_scene, E, exposureScale);        
     }
 
     // Density curves from agx-emulsion's csv data.
