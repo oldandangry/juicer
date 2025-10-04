@@ -58,8 +58,7 @@ namespace Scanner {
             rgbIn, E, exposureScale,
             tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
-            (int)std::clamp(ws.spectralMode, 0, 1),
-            (ws.exposureModel == 1) && ws.spdReady,
+            ws.spdReady,
             ws.sensB, ws.sensG, ws.sensR);
 
         // Per-instance logE offsets (no globals)

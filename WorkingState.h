@@ -57,11 +57,7 @@ struct WorkingState {
     bool  spdReady = false;
 
     // Snapshot of print runtime used for this WorkingState build (immutable during render)
-    std::unique_ptr<Print::Runtime> printRT;
-
-    // >>> New per-instance mode flags (instead of touching globals in render)
-    int spectralMode = 0;  // 0 = Hanatos, 1 = CMF-basis
-    int exposureModel = 1;  // 0 = Matrix, 1 = SPD    
+    std::unique_ptr<Print::Runtime> printRT;     
 
     // Versioning for atomic swap / debugging
     std::uint64_t buildCounter = 0;

@@ -574,8 +574,7 @@ namespace Print {
             rgbMid, E, 1.0f,
             tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
-            (int)std::clamp(ws.spectralMode, 0, 1),
-            (ws.exposureModel == 1) && ws.spdReady,
+            ws.spdReady,
             ws.sensB, ws.sensG, ws.sensR);
         E[0] *= cameraExposureScale; E[1] *= cameraExposureScale; E[2] *= cameraExposureScale;
 
@@ -953,8 +952,7 @@ namespace Print {
             rgbIn, E, 1.0f,
             tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
-            (int)std::clamp(ws.spectralMode, 0, 1),
-            (ws.exposureModel == 1) && ws.spdReady,
+            ws.spdReady,
             ws.sensB, ws.sensG, ws.sensR);
 
         // Apply camera exposure explicitly on negative leg to ensure parity and avoid hidden double-handling.

@@ -885,7 +885,6 @@ namespace Spectral {
     // -------------------------------------------------------------------------
     // Hanatos 2025 spectral upsampling (direct spectra LUT, no bases)
     // -------------------------------------------------------------------------
-    inline int gSpectralUpsamplingMode = 0; // 0: Hanatos (default), 1: CMF-basis
     inline bool gHanatosAvailable = false;
     
     // Ensure precomputed tables are up-to-date with current illuminant and shape.
@@ -1344,7 +1343,6 @@ namespace Spectral {
     inline void rgbDWG_to_layerExposures_flex_with_tables(
         const float rgbDWG[3], float E[3], float exposureScale,
         const SpectralTables* T, const float* S_inv /* size 9 */,
-        int spectralMode /*0 Hanatos, 1 CMF-basis*/,
         bool useSPDExposure)
     {
         const bool spdOk = useSPDExposure && T && S_inv && T->K > 0;
@@ -1357,7 +1355,7 @@ namespace Spectral {
         thread_local std::vector<float> Ee_scene;
         Ee_scene.resize(T->K);
 
-        if (spectralMode == 0 && gHanatosAvailable) {
+        if (gHanatosAvailable) {
             reconstruct_Ee_from_DWG_RGB_hanatos(rgbDWG, Ee_scene);
         }
         else {
@@ -1370,8 +1368,7 @@ namespace Spectral {
     // Per-instance SPD exposure using per-instance sensitivity curves
     inline void rgbDWG_to_layerExposures_from_tables_with_curves(
         const float rgbDWG[3], float E[3], float exposureScale,
-        const SpectralTables* T, const float* S_inv /* size 9 */,
-        int spectralMode /*0 Hanatos, 1 CMF-basis*/,
+        const SpectralTables* T, const float* S_inv /* size 9 */,        
         bool useSPDExposure,
         const Curve& sB, const Curve& sG, const Curve& sR)
     {
@@ -1384,7 +1381,7 @@ namespace Spectral {
         thread_local std::vector<float> Ee_scene;
         Ee_scene.resize(T->K);
 
-        if (spectralMode == 0 && gHanatosAvailable) {
+        if (gHanatosAvailable) {
             reconstruct_Ee_from_DWG_RGB_hanatos(rgbDWG, Ee_scene);
         }
         else {
@@ -1667,7 +1664,7 @@ namespace Spectral {
         Ee_scene.resize(gShape.K);
 
         // SPD path: reconstruct the scene SPD per pixel then integrate with sensitivities
-        if (gSpectralUpsamplingMode == 0) {
+        if (gHanatosAvailable) {
             reconstruct_Ee_from_DWG_RGB_hanatos(rgbDWG, Ee_scene);
         }
         else {

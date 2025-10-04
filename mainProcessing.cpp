@@ -291,8 +291,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     rgbIn, E, 1.0f,
                     tablesSPD,
                     (_ws && _ws->spdReady ? _ws->spdSInv : nullptr),
-                    (int)std::clamp(_ws ? _ws->spectralMode : 0, 0, 1),
-                    (_ws && (_ws->exposureModel == 1) && _ws->spdReady),
+                    (_ws && _ws->spdReady),
                     _ws->sensB, _ws->sensG, _ws->sensR);
 
                 // Apply camera exposure explicitly to E to avoid hidden/no-op in table path.

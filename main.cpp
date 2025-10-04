@@ -81,8 +81,7 @@ namespace {
         try {
             const std::string lutPath = gDataDir + "irradiance_xy_tc.npy";
             const bool lutOK = Spectral::load_hanatos_spectra_lut(lutPath);
-            Spectral::gHanatosAvailable = lutOK;
-            // Do NOT flip gSpectralUpsamplingMode globally here; instances carry spectralMode themselves.
+            Spectral::gHanatosAvailable = lutOK;            
         }
         catch (...) {
             Spectral::gHanatosAvailable = false;
@@ -143,9 +142,7 @@ struct ParamSnapshot {
     int printPaperIndex = 0;
     int refIll = 0;
     int viewIll = 0;
-    int enlIll = 2;
-    int spectralMode = 0;   // 0 Hanatos, 1 CMF-basis
-    int exposureModel = 1;  // 0 Matrix, 1 SPD
+    int enlIll = 2;    
     int couplersActive = 1;
     int couplersPrecorrect = 1;
     double aR = 0.7, aG = 0.7, aB = 0.5;
@@ -162,9 +159,7 @@ static inline uint64_t hash_params(const ParamSnapshot& p) {
     h = mix(h, (uint64_t)p.printPaperIndex);
     h = mix(h, (uint64_t)p.refIll);
     h = mix(h, (uint64_t)p.viewIll);
-    h = mix(h, (uint64_t)p.enlIll);
-    h = mix(h, (uint64_t)p.spectralMode);
-    h = mix(h, (uint64_t)p.exposureModel);
+    h = mix(h, (uint64_t)p.enlIll);    
     h = mix(h, (uint64_t)p.couplersActive);
     h = mix(h, (uint64_t)p.couplersPrecorrect);
     h = mix(h, (uint64_t)(p.aR * 10000.0));
@@ -269,8 +264,7 @@ static bool load_resampled_channel(const std::string& path,
 // Placeholder parameter names (Step 1)
 #define kParamExposure "Exposure"   // EV
 #define kParamContrast "Contrast"   // unitless
-#define kParamSpectralMode "SpectralUpsampling" // 0: Hanatos, 1: CMF-basis
-#define kParamExposureModel "ExposureModel" // 0: Matrix, 1: SPD
+#define kParamSpectralMode "SpectralUpsampling"
 #define kParamViewingIllum  "ViewingIlluminant"
 
 // Film stock parameter
@@ -948,10 +942,6 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         JTRACE("BUILD", oss.str());
     }
 
-    target->spectralMode = std::clamp(P.spectralMode, 0, 1);
-    target->exposureModel = P.exposureModel;
-
-
     // 6) Snapshot data into WorkingState
     target->densB = std::move(densB);
     target->densG = std::move(densG);
@@ -1091,9 +1081,7 @@ public:
         try {
             _pExposure = fetchDoubleParam(kParamExposure);
             _pFilmStock = fetchChoiceParam(kParamFilmStock);
-            _pPrintPaper = fetchChoiceParam(kParamPrintPaper);
-            _pSpectralMode = fetchChoiceParam(kParamSpectralMode);
-            _pExposureModel = fetchChoiceParam(kParamExposureModel);
+            _pPrintPaper = fetchChoiceParam(kParamPrintPaper);            
             _pRefIll = fetchChoiceParam("ReferenceIlluminant");
             _pViewIll = fetchChoiceParam("ViewingIlluminant");
             _pEnlIll = fetchChoiceParam("EnlargerIlluminant");
@@ -1408,9 +1396,7 @@ private:
     // Cached params (wrappers)
     OFX::DoubleParam* _pExposure = nullptr;
     OFX::ChoiceParam* _pFilmStock = nullptr;
-    OFX::ChoiceParam* _pPrintPaper = nullptr;
-    OFX::ChoiceParam* _pSpectralMode = nullptr;
-    OFX::ChoiceParam* _pExposureModel = nullptr;
+    OFX::ChoiceParam* _pPrintPaper = nullptr;    
     OFX::ChoiceParam* _pRefIll = nullptr;
     OFX::ChoiceParam* _pViewIll = nullptr;
     OFX::ChoiceParam* _pEnlIll = nullptr;
@@ -1448,9 +1434,7 @@ private:
         if (_pPrintPaper)     _pPrintPaper->getValue(P.printPaperIndex);
         if (_pRefIll)         _pRefIll->getValue(P.refIll);
         if (_pViewIll)        _pViewIll->getValue(P.viewIll);
-        if (_pEnlIll)         _pEnlIll->getValue(P.enlIll);
-        if (_pSpectralMode)   _pSpectralMode->getValue(P.spectralMode);
-        if (_pExposureModel)  _pExposureModel->getValue(P.exposureModel);
+        if (_pEnlIll)         _pEnlIll->getValue(P.enlIll);        
         if (_pUnmix) { bool v = true; _pUnmix->getValue(v); P.unmix = v ? 1 : 0; }
 #ifdef JUICER_ENABLE_COUPLERS
         if (_pCouplersActive) { bool v = true; _pCouplersActive->getValue(v); P.couplersActive = v ? 1 : 0; }
@@ -1551,8 +1535,7 @@ private:
             rgbMid, E, /*exposureScale*/ 1.0f,
             (ws->tablesView.K > 0 ? &ws->tablesView : nullptr),
             (ws->spdReady ? ws->spdSInv : nullptr),
-            (int)std::clamp(ws->spectralMode, 0, 1),
-            (ws->exposureModel == 1) && ws->spdReady,
+            ws->spdReady,
             ws->sensB, ws->sensG, ws->sensR);
 
         // Negative logE offsets are zero by design
@@ -1960,18 +1943,9 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
     {
         OFX::ChoiceParamDescriptor* p = desc.defineChoiceParam(kParamSpectralMode);
         p->setLabel("Spectral upsampling");
-        p->appendOption("Hanatos");
-        p->appendOption("CMF-basis");
+        p->appendOption("Hanatos");        
         p->setDefault(0);
-    }
-    // Exposure model
-    {
-        OFX::ChoiceParamDescriptor* p = desc.defineChoiceParam(kParamExposureModel);
-        p->setLabel("Exposure model");
-        p->appendOption("Matrix");
-        p->appendOption("SPD");
-        p->setDefault(1);
-    }
+    }    
     // Unmix densities
     {
         OFX::BooleanParamDescriptor* p = desc.defineBooleanParam("UnmixDensities");
