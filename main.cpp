@@ -369,16 +369,6 @@ static const char* film_json_key_for_folder(const std::string& folder) {
     return nullptr;
 }
 
-// Safe CSV loader that fails silently (no exceptions)
-static std::vector<std::pair<float, float>> load_pairs_silent(const std::string& path) {
-    try {
-        return Spectral::load_csv_pairs(path);
-    }
-    catch (...) {
-        return {};
-    }
-}
-
 /// Reload film stock assets into BaseState (no global mutation). Returns true on success.
 static bool load_film_stock_into_base(const std::string& stockDir, InstanceState& S) {
     JTRACE_SCOPE("STOCK", std::string("load_film_stock_into_base: ") + stockDir);
@@ -398,57 +388,41 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
     std::vector<std::pair<float, float>> dc_g;
     std::vector<std::pair<float, float>> dc_r;
 
-    bool usedJson = false;
     S.base.densitometerType.clear();
     S.base.densityMidNeutral.clear();
 
-    {
-        const std::string folder = last_path_segment(stockDir);
-        if (!folder.empty()) {
-            if (const char* jsonKey = film_json_key_for_folder(folder)) {
-                const std::string jsonPath = gDataDir + std::string("profiles\\") + jsonKey + std::string(".json");
-                Profiles::AgxFilmProfile profile;
-                if (Profiles::load_agx_film_profile_json(jsonPath, profile)) {
-                    usedJson = true;
-                    c_data = std::move(profile.dyeC);
-                    m_data = std::move(profile.dyeM);
-                    y_data = std::move(profile.dyeY);
-                    b_sens = std::move(profile.logSensB);
-                    g_sens = std::move(profile.logSensG);
-                    r_sens = std::move(profile.logSensR);
-                    dc_b = std::move(profile.densityCurveB);
-                    dc_g = std::move(profile.densityCurveG);
-                    dc_r = std::move(profile.densityCurveR);
-                    dmin = std::move(profile.baseMin);
-                    dmid = std::move(profile.baseMid);
-                    S.base.densitometerType = sanitize_densitometer_type(profile.densitometer);
-                    S.base.densityMidNeutral = std::move(profile.densityMidNeutral);
-                    JTRACE("STOCK", std::string("loaded agx profile json: ") + jsonKey);
-                }
-                else {
-                    JTRACE("STOCK", std::string("agx profile json unavailable: ") + jsonKey);
-                }
-            }
-        }
+    const std::string folder = last_path_segment(stockDir);
+    if (folder.empty()) {
+        JTRACE("STOCK", "stock folder empty; cannot resolve JSON profile");
+        return false;
     }
 
-    if (!usedJson) {
-        JTRACE("STOCK", "falling back to legacy CSV stock assets");
-        y_data = load_pairs_silent(stockDir + "dye_density_y.csv");
-        m_data = load_pairs_silent(stockDir + "dye_density_m.csv");
-        c_data = load_pairs_silent(stockDir + "dye_density_c.csv");
-
-        b_sens = load_pairs_silent(stockDir + "log_sensitivity_b.csv");
-        g_sens = load_pairs_silent(stockDir + "log_sensitivity_g.csv");
-        r_sens = load_pairs_silent(stockDir + "log_sensitivity_r.csv");
-
-        dmin = load_pairs_silent(stockDir + "dye_density_min.csv");
-        dmid = load_pairs_silent(stockDir + "dye_density_mid.csv");
-
-        dc_b = load_pairs_silent(stockDir + "density_curve_b.csv");
-        dc_g = load_pairs_silent(stockDir + "density_curve_g.csv");
-        dc_r = load_pairs_silent(stockDir + "density_curve_r.csv");
+    const char* jsonKey = film_json_key_for_folder(folder);
+    if (!jsonKey) {
+        JTRACE("STOCK", std::string("no agx profile key for folder: ") + folder);
+        return false;
     }
+    const std::string jsonPath = gDataDir + std::string("profiles\\") + jsonKey + std::string(".json");
+    Profiles::AgxFilmProfile profile;
+    if (!Profiles::load_agx_film_profile_json(jsonPath, profile)) {
+        JTRACE("STOCK", std::string("failed to load agx profile json: ") + jsonKey);
+        return false;
+    }
+
+    c_data = std::move(profile.dyeC);
+    m_data = std::move(profile.dyeM);
+    y_data = std::move(profile.dyeY);
+    b_sens = std::move(profile.logSensB);
+    g_sens = std::move(profile.logSensG);
+    r_sens = std::move(profile.logSensR);
+    dc_b = std::move(profile.densityCurveB);
+    dc_g = std::move(profile.densityCurveG);
+    dc_r = std::move(profile.densityCurveR);
+    dmin = std::move(profile.baseMin);
+    dmid = std::move(profile.baseMid);
+    S.base.densitometerType = sanitize_densitometer_type(profile.densitometer);
+    S.base.densityMidNeutral = std::move(profile.densityMidNeutral);
+    JTRACE("STOCK", std::string("loaded agx profile json: ") + jsonKey);
 
     {
         auto sz = [](const auto& v) { return (int)v.size(); };
