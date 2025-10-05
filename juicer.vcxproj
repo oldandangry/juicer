@@ -172,7 +172,7 @@
     <ClCompile Include="mainProcessing.cpp" />
     <ClCompile Include="NeutralFilters.cpp" />
     <ClCompile Include="ProcTestWrappers.cpp" />
-    <ClCompile Include="ProFileJSONLoader.cpp" />
+    <ClCompile Include="ProfileJSONLoader.cpp" />
     <ClCompile Include="SpectralMathAVX.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|x64'">AdvancedVectorExtensions2</EnableEnhancedInstructionSet>

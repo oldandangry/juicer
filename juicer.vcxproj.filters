@@ -54,7 +54,7 @@
     <ClCompile Include="ProcTestWrappers.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ProFileJSONLoader.cpp">
+    <ClCompile Include="ProfileJSONLoader.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="AkimaInterpolator.cpp">
