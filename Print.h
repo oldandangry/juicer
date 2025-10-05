@@ -8,6 +8,7 @@
 #include "Illuminants.h"
 #include "WorkingState.h"
 #include "ProfileJSONLoader.h"
+#include "AkimaInterpolator.h"
 #include <sstream>
 #include <algorithm>
 
@@ -23,35 +24,20 @@ namespace Print {
 
     constexpr float kEnlargerSteps = 170.0f;
 
-    inline float blend_dichroic_filter_linear(float curveVal, float amount) {
-        const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 0.0f, 1.0f) : 1.0f;
-        float steps = std::isfinite(amount) ? amount : 0.0f;
-        
-        if (steps <= 8.0f && steps >= -8.0f) {
-            steps *= kEnlargerSteps;
-        }
-        const float limitSteps = 4.0f * kEnlargerSteps;
-        steps = std::clamp(steps, -limitSteps, limitSteps);
-        const float normalized = steps / kEnlargerSteps;
-        const float blended = 1.0f - (1.0f - c) * normalized;
-        return std::max(0.0f, blended);
+    inline float blend_dichroic_filter_linear(float curveVal, float normalizedAmount) {
+        const float c = std::isfinite(curveVal) ? curveVal : 1.0f;
+        const float a = std::isfinite(normalizedAmount) ? normalizedAmount : 0.0f;
+        return 1.0f - (1.0f - c) * a;
     }
 
     inline float compose_dichroic_amount(float neutralAmount, float deltaAmount) {
-        auto amount_to_steps = [](float amount) -> float {
-            if (!std::isfinite(amount)) return 0.0f;
-            float steps = amount;
-            if (steps >= -8.0f && steps <= 8.0f) {
-                steps *= kEnlargerSteps;
-            }
-            const float limit = 4.0f * kEnlargerSteps;
-            return std::clamp(steps, -limit, limit);
-            };
-
-        const float neutralSteps = amount_to_steps(neutralAmount);
-        const float deltaSteps = amount_to_steps(deltaAmount);
-        const float limit = 4.0f * kEnlargerSteps;
-        const float totalSteps = std::clamp(neutralSteps + deltaSteps, -limit, limit);
+        const float neutral = std::isfinite(neutralAmount)
+            ? std::clamp(neutralAmount, 0.0f, 1.0f)
+            : 0.0f;
+        float deltaSteps = std::isfinite(deltaAmount) ? deltaAmount : 0.0f;
+        const float shiftLimit = kEnlargerSteps;
+        deltaSteps = std::clamp(deltaSteps, -shiftLimit, shiftLimit);
+        const float totalSteps = neutral * kEnlargerSteps + deltaSteps;
         return totalSteps / kEnlargerSteps;
     }
 
@@ -72,7 +58,7 @@ namespace Print {
         bool bypass = false;     // if true, bypass print (show negative)
         float exposure = 1.0f;   // enlarger exposure scalar
         float preflashExposure = 0.0f; // additional uniform print exposure (linear scale)
-        float yFilter = 0.0f;    // delta from neutral baseline (Durst wheel steps scaled by 170)
+        float yFilter = 0.0f;    // delta from neutral baseline in Durst steps (±170)
         float mFilter = 0.0f;
         float cFilter = 0.0f;    // optional
 
@@ -439,16 +425,7 @@ namespace Print {
         auto load_pairs_silent = [](const std::string& path) {
             try { return Spectral::load_csv_pairs(path); }
             catch (...) { return std::vector<std::pair<float, float>>{}; }
-            };
-
-        auto normalize_pct_pairs_to_unit = [](std::vector<std::pair<float, float>>& pairs) {
-            for (auto& p : pairs) {
-                float v = p.second * (1.0f / 100.0f);
-                if (!std::isfinite(v) || v < 0.0f) v = 0.0f;
-                if (v > 1.0f) v = 1.0f;
-                p.second = v;
-            }
-            };
+            };        
 
         // Try Durst Digital Light first
         std::string yPath = dirYMC + "filter_y.csv";
@@ -463,16 +440,7 @@ namespace Print {
         if (y_pairs.empty() || m_pairs.empty() || c_pairs.empty()) {
             std::string alt1 = dirYMC; // allow caller to pass different vendor dirs if desired
             // Identity fallback will be used below if still empty.
-        }
-
-        // Normalize percent to unit and pin to current shape
-        if (!y_pairs.empty()) normalize_pct_pairs_to_unit(y_pairs);
-        if (!m_pairs.empty()) normalize_pct_pairs_to_unit(m_pairs);
-        if (!c_pairs.empty()) normalize_pct_pairs_to_unit(c_pairs);
-
-        auto y_pinned = Spectral::resample_pairs_to_shape(y_pairs, Spectral::gShape);
-        auto m_pinned = Spectral::resample_pairs_to_shape(m_pairs, Spectral::gShape);
-        auto c_pinned = Spectral::resample_pairs_to_shape(c_pairs, Spectral::gShape);
+        }        
 
         rt.filterY.lambda_nm = Spectral::gShape.wavelengths;
         rt.filterM.lambda_nm = Spectral::gShape.wavelengths;
@@ -482,14 +450,42 @@ namespace Print {
         rt.filterM.linear.resize(Spectral::gShape.K);
         rt.filterC.linear.resize(Spectral::gShape.K);
 
-        for (int i = 0; i < Spectral::gShape.K; ++i) {
-            float fy = (!y_pinned.empty()) ? std::max(0.0f, std::min(1.0f, y_pinned[i].second)) : 1.0f;
-            float fm = (!m_pinned.empty()) ? std::max(0.0f, std::min(1.0f, m_pinned[i].second)) : 1.0f;
-            float fc = (!c_pinned.empty()) ? std::max(0.0f, std::min(1.0f, c_pinned[i].second)) : 1.0f;
-            rt.filterY.linear[i] = fy;
-            rt.filterM.linear[i] = fm;
-            rt.filterC.linear[i] = fc;
-        }
+        auto sample_curve = [](const std::vector<std::pair<float, float>>& pairs,
+            Spectral::Curve& dst) {
+                if (Spectral::gShape.K <= 0) {
+                    dst.linear.clear();
+                    dst.lambda_nm.clear();
+                    return;
+                }
+                dst.linear.assign((size_t)Spectral::gShape.K, 1.0f);
+                if (pairs.size() < 2) {
+                    return;
+                }
+                std::vector<float> x, y;
+                x.reserve(pairs.size());
+                y.reserve(pairs.size());
+                for (const auto& p : pairs) {
+                    if (!std::isfinite(p.first) || !std::isfinite(p.second)) continue;
+                    x.push_back(p.first);
+                    y.push_back(p.second * (1.0f / 100.0f));
+                }
+                if (x.size() < 2) {
+                    return;
+                }
+                Interpolation::AkimaInterpolator interp;
+                if (!interp.build(x, y)) {
+                    return;
+                }
+                for (int i = 0; i < Spectral::gShape.K; ++i) {
+                    const float wl = Spectral::gShape.wavelengths[i];
+                    const float v = interp.evaluate(wl);
+                    dst.linear[(size_t)i] = std::isfinite(v) ? v : 1.0f;
+                }
+            };
+
+        sample_curve(y_pairs, rt.filterY);
+        sample_curve(m_pairs, rt.filterM);
+        sample_curve(c_pairs, rt.filterC);
 
         // Diagnostics
         {

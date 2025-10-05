@@ -1312,6 +1312,9 @@ public:
             printParams.yFilter -= prt->neutralY;
             printParams.mFilter -= prt->neutralM;
             printParams.cFilter -= prt->neutralC;
+            printParams.yFilter *= Print::kEnlargerSteps;
+            printParams.mFilter *= Print::kEnlargerSteps;
+            printParams.cFilter *= Print::kEnlargerSteps;
         }
 
         const bool wsReady = (ws && ws->buildCounter > 0 &&
@@ -1448,61 +1451,245 @@ private:
         if (prt->illumView.linear.size() != (size_t)Spectral::gShape.K ||
             prt->illumEnlarger.linear.size() != (size_t)Spectral::gShape.K) return;
 
-        // Start from current UI values
-        double y = 1.0, m = 1.0, c = 1.0, pexp = 1.0;
-        if (_pPrintExposure) _pPrintExposure->getValue(pexp);
-        if (_pEnlargerY) _pEnlargerY->getValue(y);
-        if (_pEnlargerM) _pEnlargerM->getValue(m);
-        if (_pEnlargerC) _pEnlargerC->getValue(c);
+        
+        double exposure = 1.0;
+        if (_pPrintExposure) _pPrintExposure->getValue(exposure);
 
-        // Force YM-only fitting parity: use current neutral cyan from UI (set via JSON), not hardcoded.
-        if (_pEnlargerC) { double cN = 0.35; _pEnlargerC->getValue(cN); c = cN; }
+        const float neutralY = std::clamp(prt->neutralY, 0.0f, 1.0f);
+        const float neutralM = std::clamp(prt->neutralM, 0.0f, 1.0f);
+        const float neutralC = std::clamp(prt->neutralC, 0.0f, 1.0f);
 
-        // Use a mid-grey DWG input for fitting
+        struct Variables {
+            double y;
+            double m;
+            double exposure;
+        };
+        
         const float rgbMid[3] = { 0.18f, 0.18f, 0.18f };
 
-        // Iterative ratio balancing over a few passes to equalize DWG channels
-        float fY = (float)y, fM = (float)m, fC = (float)c;
-        const int maxIter = 8;
-        for (int it = 0; it < maxIter; ++it) {
-            // Simulate print with current filters
-            Print::Params prm;
+        auto evaluate_rgb = [&](const Variables& vars, float rgbOut[3]) -> bool {
+            Print::Runtime rtCandidate = *prt;
+            rtCandidate.neutralY = static_cast<float>(std::clamp(vars.y, 0.0, 1.0));
+            rtCandidate.neutralM = static_cast<float>(std::clamp(vars.m, 0.0, 1.0));
+            rtCandidate.neutralC = neutralC;
+
+            Print::Params prm{};
             prm.bypass = false;
-            prm.exposure = (float)pexp;
-            prm.yFilter = fY - prt->neutralY;
-            prm.mFilter = fM - prt->neutralM;
-            prm.cFilter = fC - prt->neutralC;
+            prm.exposure = static_cast<float>(std::max(vars.exposure, 0.0));
+            prm.preflashExposure = 0.0f;
+            prm.yFilter = 0.0f;
+            prm.mFilter = 0.0f;
+            prm.cFilter = 0.0f;
 
-            float rgbOut[3] = { rgbMid[0], rgbMid[1], rgbMid[2] };
-            // Safe call path mirrors JuicerProcessing fallback (non-spatial) compute
-            Print::simulate_print_pixel(rgbMid, prm, *prt, ws->dirRT, *ws, /*exposureScale*/ 1.0f, rgbOut);
+            float rgbTmp[3] = { rgbMid[0], rgbMid[1], rgbMid[2] };
+            Print::simulate_print_pixel(rgbMid, prm, rtCandidate, ws->dirRT, *ws, 1.0f, rgbTmp);
+            if (!std::isfinite(rgbTmp[0]) || !std::isfinite(rgbTmp[1]) || !std::isfinite(rgbTmp[2])) {
+                return false;
+            }
+            rgbOut[0] = rgbTmp[0];
+            rgbOut[1] = rgbTmp[1];
+            rgbOut[2] = rgbTmp[2];
+            return true;
+            };
 
-            // If any non-finite, break
-            if (!std::isfinite(rgbOut[0]) || !std::isfinite(rgbOut[1]) || !std::isfinite(rgbOut[2])) break;
+        auto residual_cost = [&](const float rgb[3]) {
+            const double r0 = static_cast<double>(rgb[0]) - rgbMid[0];
+            const double r1 = static_cast<double>(rgb[1]) - rgbMid[1];
+            const double r2 = static_cast<double>(rgb[2]) - rgbMid[2];
+            return 0.5 * (r0 * r0 + r1 * r1 + r2 * r2);
+            };
 
-            // Target equal RGB; adjust filters inversely proportional to channel deviation
-            const float mean = (rgbOut[0] + rgbOut[1] + rgbOut[2]) * (1.0f / 3.0f);
-            auto safeAdj = [&](float f, float v)->float {
-                const float eps = 1e-4f;
-                if (mean <= eps) return f;
-                float ratio = mean / std::max(v, eps);
-                // Dampen and clamp adjustments
-                ratio = std::clamp(ratio, 0.5f, 2.0f);
-                float fout = f * ratio;
-                if (!std::isfinite(fout)) fout = f;
-                return std::clamp(fout, 0.05f, 8.0f);
+        auto clamp_vars = [](const Variables& v) {
+            Variables out = v;
+            out.y = std::clamp(out.y, 0.0, 1.0);
+            out.m = std::clamp(out.m, 0.0, 1.0);
+            out.exposure = std::clamp(out.exposure, 0.0, 10.0);
+            return out;
+            };
+
+        Variables current{ neutralY, neutralM, std::max(0.0, exposure) };
+        float rgbCurrent[3];
+        if (!evaluate_rgb(current, rgbCurrent)) {
+            return;
+        }
+        double bestCost = residual_cost(rgbCurrent);
+        Variables best = current;
+        float rgbBest[3] = { rgbCurrent[0], rgbCurrent[1], rgbCurrent[2] };
+
+        const int kMaxIter = 25;
+        double lambda = 1e-2;
+
+        auto compute_jacobian = [&](const Variables& vars, const float baseRgb[3], double J[3][3]) -> bool {
+            const double stepY = 1e-4;
+            const double stepM = 1e-4;
+            const double stepExp = 1e-3;
+
+            auto forward_diff = [&](Variables perturbed, double step, int col) -> bool {
+                float rgbPert[3];
+                if (!evaluate_rgb(perturbed, rgbPert)) {
+                    return false;
+                }
+                for (int row = 0; row < 3; ++row) {
+                    J[row][col] = (static_cast<double>(rgbPert[row]) - baseRgb[row]) / step;
+                }
+                return true;
                 };
-            fY = safeAdj(fY, rgbOut[0]);
-            fM = safeAdj(fM, rgbOut[1]);
-            fC = safeAdj(fC, rgbOut[2]);
+
+            Variables vy = vars;
+            vy.y = std::clamp(vy.y + stepY, 0.0, 1.0);
+            if (!forward_diff(vy, stepY, 0)) return false;
+
+            Variables vm = vars;
+            vm.m = std::clamp(vm.m + stepM, 0.0, 1.0);
+            if (!forward_diff(vm, stepM, 1)) return false;
+
+            Variables ve = vars;
+            ve.exposure = std::max(0.0, ve.exposure + stepExp);
+            if (!forward_diff(ve, stepExp, 2)) return false;
+            return true;
+            };
+
+        auto solve_linear = [](double A[3][3], double b[3], double x[3]) -> bool {
+            double mat[3][4];
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    mat[r][c] = A[r][c];
+                }
+                mat[r][3] = b[r];
+            }
+            for (int i = 0; i < 3; ++i) {
+                int pivot = i;
+                double maxVal = std::abs(mat[i][i]);
+                for (int r = i + 1; r < 3; ++r) {
+                    const double v = std::abs(mat[r][i]);
+                    if (v > maxVal) {
+                        maxVal = v;
+                        pivot = r;
+                    }
+                }
+                if (maxVal < 1e-12) {
+                    return false;
+                }
+                if (pivot != i) {
+                    std::swap(mat[pivot], mat[i]);
+                }
+                const double invDiag = 1.0 / mat[i][i];
+                for (int c = i; c < 4; ++c) {
+                    mat[i][c] *= invDiag;
+                }
+                for (int r = 0; r < 3; ++r) {
+                    if (r == i) continue;
+                    const double factor = mat[r][i];
+                    for (int c = i; c < 4; ++c) {
+                        mat[r][c] -= factor * mat[i][c];
+                    }
+                }
+            }
+            for (int i = 0; i < 3; ++i) {
+                x[i] = mat[i][3];
+            }
+            return true;
+            };
+
+        for (int iter = 0; iter < kMaxIter; ++iter) {
+            double J[3][3];
+            if (!compute_jacobian(current, rgbCurrent, J)) {
+                break;
+            }
+
+            double JTJ[3][3] = { 0 };
+            double JTr[3] = { 0 };
+            double residual[3] = {
+                static_cast<double>(rgbCurrent[0]) - rgbMid[0],
+                static_cast<double>(rgbCurrent[1]) - rgbMid[1],
+                static_cast<double>(rgbCurrent[2]) - rgbMid[2]
+            };
+
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 3; ++col) {
+                    for (int k = 0; k < 3; ++k) {
+                        JTJ[col][k] += J[row][col] * J[row][k];
+                    }
+                }
+                for (int col = 0; col < 3; ++col) {
+                    JTr[col] += J[row][col] * residual[row];
+                }
+            }
+
+            bool stepAccepted = false;
+            for (int attempt = 0; attempt < 8; ++attempt) {
+                double A[3][3];
+                for (int r = 0; r < 3; ++r) {
+                    for (int c = 0; c < 3; ++c) {
+                        A[r][c] = JTJ[r][c];
+                    }
+                    A[r][r] += lambda;
+                }
+                double rhs[3] = { -JTr[0], -JTr[1], -JTr[2] };
+                double delta[3];
+                if (!solve_linear(A, rhs, delta)) {
+                    lambda *= 10.0;
+                    continue;
+                }
+                Variables candidate{
+                    current.y + delta[0],
+                    current.m + delta[1],
+                    current.exposure + delta[2]
+                };
+                candidate = clamp_vars(candidate);
+
+                float rgbCand[3];
+                if (!evaluate_rgb(candidate, rgbCand)) {
+                    lambda *= 10.0;
+                    continue;
+                }
+                const double candCost = residual_cost(rgbCand);
+                if (candCost < bestCost) {
+                    bestCost = candCost;
+                    best = candidate;
+                    rgbBest[0] = rgbCand[0];
+                    rgbBest[1] = rgbCand[1];
+                    rgbBest[2] = rgbCand[2];
+                    current = candidate;
+                    rgbCurrent[0] = rgbCand[0];
+                    rgbCurrent[1] = rgbCand[1];
+                    rgbCurrent[2] = rgbCand[2];
+                    lambda = std::max(lambda * 0.3, 1e-6);
+                    stepAccepted = true;
+                    break;
+                }
+                lambda *= 5.0;
+            }
+
+            if (!stepAccepted || bestCost < 1e-8) {
+                break;
+            }
         }
 
-        // Commit fitted filters back to UI params (use the fitted fC, not hardcoded 0.35)
         if (_pEnlargerY) _pEnlargerY->setValue(fY);
         if (_pEnlargerM) _pEnlargerM->setValue(fM);
         if (_pEnlargerC) _pEnlargerC->setValue(fC);
+        const float fittedY = static_cast<float>(best.y);
+        const float fittedM = static_cast<float>(best.m);
+        const float fittedExposure = static_cast<float>(best.exposure);
 
-    }  
+        if (_pEnlargerY) _pEnlargerY->setValue(fittedY);
+        if (_pEnlargerM) _pEnlargerM->setValue(fittedM);
+        if (_pPrintExposure) _pPrintExposure->setValue(fittedExposure);
+
+        _state->printRT.neutralY = fittedY;
+        _state->printRT.neutralM = fittedM;
+        _state->printRT.neutralC = neutralC;
+
+        if (ws && ws->printRT) {
+            Print::Runtime* mutableRT = ws->printRT.get();
+            if (mutableRT) {
+                mutableRT->neutralY = fittedY;
+                mutableRT->neutralM = fittedM;
+                mutableRT->neutralC = neutralC;
+            }
+        }
+    }      
 
 
     void onParamsPossiblyChanged(const char* changedNameOrNull);

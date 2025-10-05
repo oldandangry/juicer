@@ -167,6 +167,7 @@
     <ClCompile Include="..\OFXS\Support\Library\ofxsParams.cpp" />
     <ClCompile Include="..\OFXS\Support\Library\ofxsProperty.cpp" />
     <ClCompile Include="..\OFXS\Support\Library\ofxsPropertyValidation.cpp" />
+    <ClCompile Include="AkimaInterpolator.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="mainProcessing.cpp" />
     <ClCompile Include="NeutralFilters.cpp" />
@@ -178,6 +179,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AkimaInterpolator.h" />
     <ClInclude Include="Couplers.h" />
     <ClInclude Include="Illuminants.h" />
     <ClInclude Include="mainProcessing.h" />
