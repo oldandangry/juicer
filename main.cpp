@@ -856,8 +856,10 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         JTRACE("BUILD", oss.str());
     }
 
-    // Honor print profile logE offsets as loaded from disk (parity with agx).
+    // Calibrate print profile logE offsets using per-instance tables (agx parity).
     if (Print::profile_is_valid(S.printRT.profile)) {
+        Print::calibrate_print_logE_offsets_from_profile(target->tablesView, S.printRT.profile);
+
         std::ostringstream oss;
         oss << "print logE offsets (profile) Y/M/C="
             << S.printRT.profile.logEOffY << "/"
@@ -1190,12 +1192,17 @@ public:
             if (_pEnlargerY)     _pEnlargerY->getValue(y);
             if (_pEnlargerM)     _pEnlargerM->getValue(m);
             if (_pEnlargerC)     _pEnlargerC->getValue(c);
+            auto clampShift = [](double v) -> double {
+                if (!std::isfinite(v)) return 0.0;
+                const double limit = static_cast<double>(Print::kEnlargerSteps);
+                return std::clamp(v, -limit, limit);
+                };
             printParams.bypass = bypass;
             printParams.exposure = static_cast<float>(pexp);
             printParams.preflashExposure = static_cast<float>(preflash);
-            printParams.yFilter = static_cast<float>(y);
-            printParams.mFilter = static_cast<float>(m);
-            printParams.cFilter = static_cast<float>(c);
+            printParams.yFilter = static_cast<float>(clampShift(y));
+            printParams.mFilter = static_cast<float>(clampShift(m));
+            printParams.cFilter = static_cast<float>(clampShift(c));
         }
 
         // --- Auto exposure compensation (camera) and print exposure compensation ---
@@ -1307,15 +1314,7 @@ public:
             ? _state->activeWS.load(std::memory_order_acquire)
             : nullptr;
         const Print::Runtime* prt = (ws && ws->buildCounter > 0 && ws->printRT) ? ws->printRT.get() : nullptr;
-
-        if (prt) {
-            printParams.yFilter -= prt->neutralY;
-            printParams.mFilter -= prt->neutralM;
-            printParams.cFilter -= prt->neutralC;
-            printParams.yFilter *= Print::kEnlargerSteps;
-            printParams.mFilter *= Print::kEnlargerSteps;
-            printParams.cFilter *= Print::kEnlargerSteps;
-        }
+        
 
         const bool wsReady = (ws && ws->buildCounter > 0 &&
             ws->tablesView.K == Spectral::gShape.K &&
@@ -1452,8 +1451,7 @@ private:
             prt->illumEnlarger.linear.size() != (size_t)Spectral::gShape.K) return;
 
         
-        double exposure = 1.0;
-        if (_pPrintExposure) _pPrintExposure->getValue(exposure);
+        const double exposureSeed = 1.0;
 
         const float neutralY = std::clamp(prt->neutralY, 0.0f, 1.0f);
         const float neutralM = std::clamp(prt->neutralM, 0.0f, 1.0f);
@@ -1465,7 +1463,7 @@ private:
             double exposure;
         };
         
-        const float rgbMid[3] = { 0.18f, 0.18f, 0.18f };
+        const float rgbMid[3] = { 0.184f, 0.184f, 0.184f };
 
         auto evaluate_rgb = [&](const Variables& vars, float rgbOut[3]) -> bool {
             Print::Runtime rtCandidate = *prt;
@@ -1507,7 +1505,7 @@ private:
             return out;
             };
 
-        Variables current{ neutralY, neutralM, std::max(0.0, exposure) };
+        Variables current{ neutralY, neutralM, exposureSeed };
         float rgbCurrent[3];
         if (!evaluate_rgb(current, rgbCurrent)) {
             return;
@@ -1671,9 +1669,9 @@ private:
         const float fittedExposure = static_cast<float>(best.exposure);
         const float fittedC = neutralC;
 
-        if (_pEnlargerY) _pEnlargerY->setValue(fittedY);
-        if (_pEnlargerM) _pEnlargerM->setValue(fittedM);
-        if (_pEnlargerC) _pEnlargerC->setValue(fittedC);
+        if (_pEnlargerY) _pEnlargerY->setValue(0.0);
+        if (_pEnlargerM) _pEnlargerM->setValue(0.0);
+        if (_pEnlargerC) _pEnlargerC->setValue(0.0);
         if (_pPrintExposure) _pPrintExposure->setValue(fittedExposure);
 
         _state->printRT.neutralY = fittedY;
@@ -1743,9 +1741,9 @@ void JuicerEffect::bootstrap_after_attach() {
             std::tuple<float, float, float> ymc{};
             if (load_enlarger_neutral_filters(jsonPath, paperKeyLocal, "TH-KG3-L", negKey, ymc)) {
                 float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
-                if (_pEnlargerY) _pEnlargerY->setValue(y);
-                if (_pEnlargerM) _pEnlargerM->setValue(m);
-                if (_pEnlargerC) _pEnlargerC->setValue(c);
+                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
+                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
                 JTRACE("PRINT", "Applied neutral filters (JSON) Y/M/C=" + std::to_string(y) + "/" + std::to_string(m) + "/" + std::to_string(c));
                 if (_pPrintExposureComp) _pPrintExposureComp->setValue(true);
 
@@ -1757,11 +1755,14 @@ void JuicerEffect::bootstrap_after_attach() {
             else {
                 JTRACE("PRINT", "Neutral filters JSON not found or incomplete; leaving defaults");
 
-                // Fallback: persist current UI values or defaults
-                const float yDef = 0.96f, mDef = 0.69f, cDef = 0.35f;
-                _state->printRT.neutralY = (_pEnlargerY ? (float)_pEnlargerY->getValue() : yDef);
-                _state->printRT.neutralM = (_pEnlargerM ? (float)_pEnlargerM->getValue() : mDef);
-                _state->printRT.neutralC = (_pEnlargerC ? (float)_pEnlargerC->getValue() : cDef);
+                // Fallback: use baked-in neutral defaults when JSON data is unavailable
+                const float yDef = 0.9f, mDef = 0.5f, cDef = 0.35f;
+                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
+                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
+                _state->printRT.neutralY = yDef;
+                _state->printRT.neutralM = mDef;
+                _state->printRT.neutralC = cDef;
             }
         }
     }
@@ -1832,9 +1833,9 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
                 float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
 
                 _state->suppressParamEvents = true; // prevent recursion
-                if (_pEnlargerY) _pEnlargerY->setValue(y);
-                if (_pEnlargerM) _pEnlargerM->setValue(m);
-                if (_pEnlargerC) _pEnlargerC->setValue(c);
+                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
+                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
                 _state->suppressParamEvents = false;
 
                 JTRACE("PRINT", "Re-applied neutral filters (JSON) Y/M/C="
@@ -1848,11 +1849,16 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
             else {
                 JTRACE("PRINT", "Neutral filters JSON not found or incomplete on paper change");
 
-                // Fallback: persist current UI values or defaults
+                // Fallback: use baked-in neutral defaults when JSON data is unavailable
                 const float yDef = 0.96f, mDef = 0.69f, cDef = 0.35f;
-                _state->printRT.neutralY = (_pEnlargerY ? (float)_pEnlargerY->getValue() : yDef);
-                _state->printRT.neutralM = (_pEnlargerM ? (float)_pEnlargerM->getValue() : mDef);
-                _state->printRT.neutralC = (_pEnlargerC ? (float)_pEnlargerC->getValue() : cDef);
+                _state->suppressParamEvents = true;
+                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
+                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
+                _state->suppressParamEvents = false;
+                _state->printRT.neutralY = yDef;
+                _state->printRT.neutralM = mDef;
+                _state->printRT.neutralC = cDef;
             }
         }
 
@@ -1883,9 +1889,9 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
             if (load_enlarger_neutral_filters(jsonPath, paperKey, "TH-KG3-L", negKey, ymc)) {
                 float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
                 _state->suppressParamEvents = true;
-                if (_pEnlargerY) _pEnlargerY->setValue(y);
-                if (_pEnlargerM) _pEnlargerM->setValue(m);
-                if (_pEnlargerC) _pEnlargerC->setValue(c);
+                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
+                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
                 _state->suppressParamEvents = false;
                 JTRACE("PRINT", "Re-applied neutral filters after stock change Y/M/C=" + std::to_string(y) + "/" + std::to_string(m) + "/" + std::to_string(c));
             }
@@ -2170,22 +2176,25 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
         {
             OFX::DoubleParamDescriptor* p = desc.defineDoubleParam("EnlargerY");
             p->setLabel("Enlarger Y");
-            p->setDefault(0.96);
-            p->setDisplayRange(0.25, 4.0);
+            p->setDefault(0.0);
+            p->setDisplayRange(-Print::kEnlargerSteps, Print::kEnlargerSteps);
+            p->setIncrement(1.0);
             if (grpPrint) p->setParent(*grpPrint);
         }
         {
             OFX::DoubleParamDescriptor* p = desc.defineDoubleParam("EnlargerM");
             p->setLabel("Enlarger M");
-            p->setDefault(0.69);
-            p->setDisplayRange(0.25, 4.0);
+            p->setDefault(0.0);
+            p->setDisplayRange(-Print::kEnlargerSteps, Print::kEnlargerSteps);
+            p->setIncrement(1.0);
             if (grpPrint) p->setParent(*grpPrint);
         }
         {
             OFX::DoubleParamDescriptor* p = desc.defineDoubleParam("EnlargerC");
-            p->setLabel("Enlarger C (neutral baseline)");
-            p->setDefault(0.35);
-            p->setDisplayRange(0.25, 4.0);
+            p->setLabel("Enlarger C");
+            p->setDefault(0.0);
+            p->setDisplayRange(-Print::kEnlargerSteps, Print::kEnlargerSteps);
+            p->setIncrement(1.0);
             if (grpPrint) p->setParent(*grpPrint);
         }
         {
