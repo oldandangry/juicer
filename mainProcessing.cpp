@@ -476,7 +476,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                         const float fC = blend_filter(
                             (_prt->filterC.linear.size() > size_t(i)) ? _prt->filterC.linear[i] : 1.0f,
                             _printParams.cFilter);
-                        const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
+                        const float fTotal = fY * fM * fC;
                         Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
                     }
 
@@ -486,12 +486,8 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                         _prt->profile, Ee_filtered, raw, _ws->tablesView.deltaLambda);
 
                     // 5) Apply print exposure ONCE (agx: raw *= exposure) + midgray compensation (vector)
-                    raw[0] *= _printParams.exposure;
-                    raw[1] *= _printParams.exposure;
-                    raw[2] *= _printParams.exposure;
-
-                    // Spectral midgray compensation factor (precomputed)
-                    raw[0] *= kMid_spectral; raw[1] *= kMid_spectral; raw[2] *= kMid_spectral;                    
+                    const float rawScale = _printParams.exposure * kMid_spectral;
+                    raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
 
                     // 6) Map to print densities via calibrated per-channel logE offsets and DC curves
                     float D_print[3];

@@ -672,7 +672,7 @@ namespace Print {
             const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
             const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
             const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
-            const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
+            const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
 
@@ -920,7 +920,7 @@ namespace Print {
             const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
             const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
             const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
-            const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
+            const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
 
@@ -929,18 +929,13 @@ namespace Print {
         raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
 
         // Apply print exposure (agx parity)
-        raw[0] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-        raw[1] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-        raw[2] *= std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-
-        // Midgray compensation (AgX parity): scale RAW vector by spectral midgray factor from camera EV.
-        {
-            const float exposureCompScale = prm.exposureCompensationEnabled
-                ? prm.exposureCompensationScale
-                : 1.0f;
-            const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
-            raw[0] *= kMid; raw[1] *= kMid; raw[2] *= kMid;
-        }        
+        const float expPrint = std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
+        const float exposureCompScale = prm.exposureCompensationEnabled
+            ? prm.exposureCompensationScale
+            : 1.0f;
+        const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
+        const float rawScale = expPrint * kMid;
+        raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
 
         // 6) RAW → print densities via DC curves and per-channel logE offsets
         float D_print[3] = { 0,0,0 };
@@ -1070,7 +1065,7 @@ namespace Print {
             const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
             const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
             const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
-            const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
+            const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
 
@@ -1079,8 +1074,7 @@ namespace Print {
         raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
 
         // Apply print exposure scaling to raw (agx: raw *= print_exposure)
-        const float expPrint = std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
-        raw[0] *= expPrint; raw[1] *= expPrint; raw[2] *= expPrint;
+        const float expPrint = std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;        
 
         // Spectral midgray compensation (AgX parity): scale RAW vector by factor = 1 / RAW_midgray_green.
         // Compute once per call, independent of pixel content.
@@ -1088,7 +1082,8 @@ namespace Print {
             ? prm.exposureCompensationScale
             : 1.0f;
         const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
-        raw[0] *= kMid; raw[1] *= kMid; raw[2] *= kMid;
+        const float rawScale = expPrint * kMid;
+        raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
 
 
         // Map raw to print densities via per-channel logE offsets and DC curves
