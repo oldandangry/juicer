@@ -854,19 +854,7 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
             << " hasRefIll=" << (hasRefIlluminant ? 1 : 0)
             << " spdReady=" << (target->spdReady ? 1 : 0);
         JTRACE("BUILD", oss.str());
-    }
-
-    // Calibrate print profile logE offsets using per-instance tables (agx parity).
-    if (Print::profile_is_valid(S.printRT.profile)) {
-        Print::calibrate_print_logE_offsets_from_profile(target->tablesView, S.printRT.profile);
-
-        std::ostringstream oss;
-        oss << "print logE offsets (profile) Y/M/C="
-            << S.printRT.profile.logEOffY << "/"
-            << S.printRT.profile.logEOffM << "/"
-            << S.printRT.profile.logEOffC;
-        JTRACE("BUILD", oss.str());
-    }
+    }    
 
     // INSERT: diagnostics and hard guards before Ecal/mid-gray
     {

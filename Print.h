@@ -47,7 +47,7 @@ namespace Print {
         Spectral::Curve baseMin, baseMid;     // optional print baseline (D-min/mid)
         bool hasBaseline = false;
         bool glareRemoved = false;
-        float logEOffC = 0.0f, logEOffM = 0.0f, logEOffY = 0.0f; // per-channel logE offsets
+        float logEOffC = 0.0f, logEOffM = 0.0f, logEOffY = 0.0f; // legacy per-channel logE offsets (unused)
 
         // Print paper spectral log-sensitivity (B/G/R on disk => Y/M/C mapping), pinned to shape (log10 domain in CSVs)
         Spectral::Curve sensY_log, sensM_log, sensC_log;
@@ -721,12 +721,12 @@ namespace Print {
         return Spectral::sample_density_at_logE(dc, logE);
     }
 
-    // Build print densities from print exposures and per-channel offsets
+    // Build print densities from print exposures (parity with agx-emulsion)
     inline void print_densities_from_Eprint(const Profile& p, const float Eprint[3], float D_print[3]) {
         auto safe_log10 = [](float v)->float { return std::log10(std::max(0.0f, v) + 1e-10f); };
-        float lEy = safe_log10(Eprint[0]) + p.logEOffY;
-        float lEm = safe_log10(Eprint[1]) + p.logEOffM;
-        float lEc = safe_log10(Eprint[2]) + p.logEOffC;
+        float lEy = safe_log10(Eprint[0]);
+        float lEm = safe_log10(Eprint[1]);
+        float lEc = safe_log10(Eprint[2]);
 
         // Clamp to density curve logE domain to prevent sampling off-curve (parity with agx guardrails)
         auto clamp_to_dc = [](float le, const Spectral::Curve& dc)->float {
@@ -750,69 +750,6 @@ namespace Print {
         D_print[2] = std::max(0.0f, D_print[2]);
 
     }    
-
-    // Calibrate per-channel print logE offsets using print paper sensitivity under viewing axis.
-// Sets p.logEOffY/M/C = mid_logE_channel - log10(channel_sensitivity), where channel_sensitivity
-// is the illuminant-weighted integral of the print paper sensitivity under the viewing CMFs.
-    inline void calibrate_print_logE_offsets_from_profile(const SpectralTables& T, Profile& p) {
-        const int K = T.K;
-        if (K <= 0) return;
-
-        // Require print paper log sensitivities to be pinned to current shape.
-        const bool sensOK =
-            (int)p.sensY_log.linear.size() == K &&
-            (int)p.sensM_log.linear.size() == K &&
-            (int)p.sensC_log.linear.size() == K;
-
-        // Require viewing axis components from tables.
-        const bool axisOK =
-            (int)T.Ybar.size() == K &&
-            (int)T.Xbar.size() == K &&
-            (int)T.Zbar.size() == K;
-
-        if (!sensOK || !axisOK) return;
-
-        // Effective per-channel sensitivity under viewing Ybar; use 10^(sens_log) to get linear sensitivity.
-        auto chan_gain_from_print = [&](const Spectral::Curve& sensLog)->double {
-            double g = 0.0;
-            for (int i = 0; i < K; ++i) {
-                const double sLin = std::pow(10.0, (double)sensLog.linear[i]);
-                g += sLin * (double)T.Ybar[i];
-            }            
-            return std::max(1e-12, g);
-            };
-
-        const double sY = chan_gain_from_print(p.sensY_log);
-        const double sM = chan_gain_from_print(p.sensM_log);
-        const double sC = chan_gain_from_print(p.sensC_log);
-
-        // Mid-logE positions per channel (robust to monotone curves).
-        auto find_mid = [](const Spectral::Curve& c)->float {
-            if (c.lambda_nm.empty()) return 0.0f;
-            const float dmin = c.linear.front();
-            const float dmax = c.linear.back();
-            const float target = dmin + 0.5f * (dmax - dmin);
-            const size_t n = c.lambda_nm.size();
-            for (size_t i = 1; i < n; ++i) {
-                const float x0 = c.lambda_nm[i - 1], x1 = c.lambda_nm[i];
-                const float y0 = c.linear[i - 1], y1 = c.linear[i];
-                if ((y0 <= target && target <= y1) || (y1 <= target && target <= y0)) {
-                    const float t = (y1 != y0) ? (target - y0) / (y1 - y0) : 0.0f;
-                    return x0 + t * (x1 - x0);
-                }
-            }
-            return c.lambda_nm.front();
-            };
-
-        const float leMidY = find_mid(p.dcY);
-        const float leMidM = find_mid(p.dcM);
-        const float leMidC = find_mid(p.dcC);
-
-        // Sensitivity-balanced offsets (print domain).
-        p.logEOffY = leMidY - static_cast<float>(std::log10(sY));
-        p.logEOffM = leMidM - static_cast<float>(std::log10(sM));
-        p.logEOffC = leMidC - static_cast<float>(std::log10(sC));
-    }
 
 
     inline void print_T_from_dyes(const Profile& p, const float D_print[3], std::vector<float>& Tprint_out) {
