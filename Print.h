@@ -135,6 +135,10 @@ namespace Print {
             catch (...) { return std::vector<std::pair<float, float>>{}; }
             };
 
+        Profiles::AgxFilmProfile profileJson;
+        const bool hasJsonProfile = !jsonProfilePath.empty() &&
+            Profiles::load_agx_film_profile_json(jsonProfilePath, profileJson);
+
         // Define helper BEFORE any calls
         auto pad_to_shape_domain = [](std::vector<std::pair<float, float>>& pairs) {
             if (pairs.empty() || Spectral::gShape.wavelengths.empty()) return;
@@ -166,6 +170,12 @@ namespace Print {
         auto b_sens = load_pairs_silent(dir + "log_sensitivity_b.csv"); // Blue -> Yellow
         auto g_sens = load_pairs_silent(dir + "log_sensitivity_g.csv"); // Green -> Magenta
         auto r_sens = load_pairs_silent(dir + "log_sensitivity_r.csv"); // Red   -> Cyan
+
+        if (hasJsonProfile) {
+            if (!profileJson.logSensB.empty()) b_sens = profileJson.logSensB;
+            if (!profileJson.logSensG.empty()) g_sens = profileJson.logSensG;
+            if (!profileJson.logSensR.empty()) r_sens = profileJson.logSensR;
+        }
 
         // Pad all to shape domain
         pad_to_shape_domain(c_eps);
@@ -331,15 +341,12 @@ namespace Print {
         std::vector<std::pair<float, float>> jsonBaseMin;
         std::vector<std::pair<float, float>> jsonBaseMid;
         float baselineScale = 1.0f;
-        if (!jsonProfilePath.empty()) {
-            Profiles::AgxFilmProfile profileJson;
-            if (Profiles::load_agx_film_profile_json(jsonProfilePath, profileJson)) {
-                baselineScale = std::isfinite(profileJson.dyeDensityMinFactor)
-                    ? profileJson.dyeDensityMinFactor
-                    : 1.0f;
-                jsonBaseMin = std::move(profileJson.baseMin);
-                jsonBaseMid = std::move(profileJson.baseMid);
-            }
+        if (hasJsonProfile) {
+            baselineScale = std::isfinite(profileJson.dyeDensityMinFactor)
+                ? profileJson.dyeDensityMinFactor
+                : 1.0f;
+            jsonBaseMin = profileJson.baseMin;
+            jsonBaseMid = profileJson.baseMid;
         }
 
         auto baselineMinPairs = std::move(bmin);
@@ -570,18 +577,31 @@ namespace Print {
         const std::vector<float>& Ee_filtered,
         float raw[3])
     {
-        // Convert log10 sensitivities to linear sensitivity per wavelength
+        raw[0] = raw[1] = raw[2] = 0.0f;
         const int K = Spectral::gShape.K;
-        double rY = 0.0, rM = 0.0, rC = 0.0;
-        for (int i = 0; i < K; ++i) {
-            const float sY = p.sensY_log.linear.empty() ? 0.0f : std::pow(10.0f, p.sensY_log.linear[i]);
-            const float sM = p.sensM_log.linear.empty() ? 0.0f : std::pow(10.0f, p.sensM_log.linear[i]);
-            const float sC = p.sensC_log.linear.empty() ? 0.0f : std::pow(10.0f, p.sensC_log.linear[i]);
+        if (K <= 0) return;
 
-            const float e = Ee_filtered[i];
-            rY += static_cast<double>(e) * static_cast<double>(sY);
-            rM += static_cast<double>(e) * static_cast<double>(sM);
-            rC += static_cast<double>(e) * static_cast<double>(sC);
+        // Spectral::build_curve_on_shape_from_log10_pairs already exponentiates the
+        // authored log10 sensitivities, so Curve::linear stores linear samples pinned
+        // to the active spectral shape. Avoid re-applying pow(10).
+        const auto& sensY = p.sensY_log.linear;
+        const auto& sensM = p.sensM_log.linear;
+        const auto& sensC = p.sensC_log.linear;
+
+        const size_t sizeY = sensY.size();
+        const size_t sizeM = sensM.size();
+        const size_t sizeC = sensC.size();
+        const size_t n = std::min({ static_cast<size_t>(K), Ee_filtered.size(), sizeY, sizeM, sizeC });
+
+        double rY = 0.0;
+        double rM = 0.0;
+        double rC = 0.0;
+
+        for (size_t i = 0; i < n; ++i) {
+            const double e = Ee_filtered[i];
+            rY += e * static_cast<double>(sensY[i]);
+            rM += e * static_cast<double>(sensM[i]);
+            rC += e * static_cast<double>(sensC[i]);
         }
 
         raw[0] = std::max(0.0f, static_cast<float>(rY)); // Y
