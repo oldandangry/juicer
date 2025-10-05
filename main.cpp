@@ -1582,7 +1582,7 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
                 JTRACE("PRINT", "Neutral filters JSON not found or incomplete on paper change");
 
                 // Fallback: use baked-in neutral defaults when JSON data is unavailable
-                const float yDef = 0.96f, mDef = 0.69f, cDef = 0.35f;
+                const float yDef = 0.9f, mDef = 0.5f, cDef = 0.35f;
                 _state->suppressParamEvents = true;
                 if (_pEnlargerY) _pEnlargerY->setValue(0.0);
                 if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
@@ -1912,11 +1912,6 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
             p->setIncrement(1.0);
             if (grpPrint) p->setParent(*grpPrint);
         }        
-        {
-            OFX::PushButtonParamDescriptor* p = desc.definePushButtonParam("PrintFitNeutral");
-            p->setLabel("Fit neutral");
-            if (grpPrint) p->setParent(*grpPrint);
-        }
     }
 
     // Illuminants
