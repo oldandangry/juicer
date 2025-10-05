@@ -1666,27 +1666,26 @@ private:
             }
         }
 
-        if (_pEnlargerY) _pEnlargerY->setValue(fY);
-        if (_pEnlargerM) _pEnlargerM->setValue(fM);
-        if (_pEnlargerC) _pEnlargerC->setValue(fC);
         const float fittedY = static_cast<float>(best.y);
         const float fittedM = static_cast<float>(best.m);
         const float fittedExposure = static_cast<float>(best.exposure);
+        const float fittedC = neutralC;
 
         if (_pEnlargerY) _pEnlargerY->setValue(fittedY);
         if (_pEnlargerM) _pEnlargerM->setValue(fittedM);
+        if (_pEnlargerC) _pEnlargerC->setValue(fittedC);
         if (_pPrintExposure) _pPrintExposure->setValue(fittedExposure);
 
         _state->printRT.neutralY = fittedY;
         _state->printRT.neutralM = fittedM;
-        _state->printRT.neutralC = neutralC;
+        _state->printRT.neutralC = fittedC;
 
         if (ws && ws->printRT) {
             Print::Runtime* mutableRT = ws->printRT.get();
             if (mutableRT) {
                 mutableRT->neutralY = fittedY;
                 mutableRT->neutralM = fittedM;
-                mutableRT->neutralC = neutralC;
+                mutableRT->neutralC = fittedC;
             }
         }
     }      
