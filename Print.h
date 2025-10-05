@@ -554,18 +554,16 @@ namespace Print {
         raw[2] = std::max(0.0f, static_cast<float>(rC * dl)); // C
     }
 
-    // Midgray compensation factor computed spectrally (AgX parity): when enabled, scale RAW so that mid-gray
-    // (green channel) remains invariant under the camera exposure *slider* EV. This uses the same negative
-    // development, enlarger illuminant (including dichroic filters), and print paper sensitivities as the print leg.
+    // Midgray compensation factor computed spectrally (AgX parity): always normalize RAW so a neutral mid-gray is
+    // mapped to unity exposure. When the print exposure compensation toggle is enabled the camera exposure EV scale
+    // is injected, otherwise the EV term is ignored. This uses the same negative development, enlarger illuminant
+    // (including dichroic filters), and print paper sensitivities as the print leg.
     inline float compute_exposure_factor_midgray(
         const WorkingState& ws,
         const Runtime& rt,
         const Params& prm,
         float exposureCompScale)
     {
-        // Only active when the UI toggle is enabled.
-        if (!prm.exposureCompensationEnabled) return 1.0f;
-
         // If slider EV scale is not meaningful, skip compensation.
         if (!std::isfinite(exposureCompScale) || exposureCompScale <= 0.0f) return 1.0f;
 
@@ -583,7 +581,8 @@ namespace Print {
             (ws.spdReady ? ws.spdSInv : nullptr),
             ws.spdReady,
             ws.sensB, ws.sensG, ws.sensR);
-        E[0] *= exposureCompScale; E[1] *= exposureCompScale; E[2] *= exposureCompScale;
+        const float exposureScale = prm.exposureCompensationEnabled ? exposureCompScale : 1.0f;
+        E[0] *= exposureScale; E[1] *= exposureScale; E[2] *= exposureScale;
 
         // 3) LogE with per-layer offsets, clamp to domain, sample negative densities
         auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {

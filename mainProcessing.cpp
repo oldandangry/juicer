@@ -359,6 +359,10 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
             ? _printParams.exposureCompensationScale
             : 1.0f;
         const float kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale);
+        const float gFactor = (_printParams.exposureCompensationEnabled &&
+            std::isfinite(_printParams.exposureCompGFactor) && _printParams.exposureCompGFactor > 0.0f)
+            ? _printParams.exposureCompGFactor
+            : 1.0f;
 
         // Pass B
         for (int yy = 0; yy < tileH; ++yy) {
@@ -492,6 +496,9 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
 
                     // Spectral midgray compensation factor (precomputed)
                     raw[0] *= kMid_spectral; raw[1] *= kMid_spectral; raw[2] *= kMid_spectral;
+                    if (_printParams.exposureCompensationEnabled) {
+                        raw[1] *= gFactor;
+                    }
 
                     // 6) Map to print densities via calibrated per-channel logE offsets and DC curves
                     float D_print[3];
