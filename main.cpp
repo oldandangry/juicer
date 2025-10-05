@@ -1344,30 +1344,13 @@ public:
         }
 
 
-        // --- Print exposure compensation via mid-gray factor from Exposure slider EV (agx parity) ---
+        // --- Print exposure compensation via spectral mid-gray probe (agx parity) ---
         {
             bool printComp = false;
             if (_pPrintExposureComp) { bool pc = false; _pPrintExposureComp->getValue(pc); printComp = pc; }
 
             printParams.exposureCompensationEnabled = printComp;
-            printParams.exposureCompensationScale = printComp ? exposureSliderScale : 1.0f;
-
-            if (printComp && printReady && !printParams.bypass) {
-                // Use camera exposure compensation EV (slider) only to derive the mid-gray factor under neutral filters.
-                double exposureCompEV = 0.0;
-                if (_pExposure) _pExposure->getValue(exposureCompEV);
-
-                const WorkingState* wsCur = ws;
-                const Print::Runtime* prtCur = prt;
-
-                const float factorG = compute_midgray_factor_green_neutral(*_state, wsCur, prtCur, exposureCompEV);
-
-                // Agx parity: apply mid-gray factor via green channel only.
-                printParams.exposureCompGFactor = factorG;
-
-                // Diagnostics
-                JTRACE("PRINT", std::string("mid-gray comp factorG=") + std::to_string(factorG));
-            }
+            printParams.exposureCompensationScale = printComp ? exposureSliderScale : 1.0f;            
         }
 
         // Tile-based multithreaded processing via OFX::ImageProcessor
@@ -1522,103 +1505,7 @@ private:
         if (_pEnlargerM) _pEnlargerM->setValue(fM);
         if (_pEnlargerC) _pEnlargerC->setValue(fC);
 
-    }    
-
-    // Compute the agx mid-gray compensation factor using neutral enlarger filters and current print runtime.
-    // Uses camera exposure compensation EV (Exposure slider), not autoEV, and never measures the preview.
-    float compute_midgray_factor_green_neutral(const InstanceState& state, const WorkingState* ws, const Print::Runtime* prt, double exposureCompEV) {
-        if (!ws || !prt) return 1.0f;
-        if (!Print::profile_is_valid(prt->profile)) return 1.0f;
-        if (ws->tablesView.K != Spectral::gShape.K) return 1.0f;
-
-        // Build a DWG mid-gray patch scaled by the camera exposure compensation EV only (agx parity).
-        const float midBase = 0.184f;
-        const float midScale = static_cast<float>(std::pow(2.0, exposureCompEV));
-        const float rgbMid[3] = { midBase * midScale, midBase * midScale, midBase * midScale };
-
-        // Negative E (no DIR on the probe) at scene EV=0 here
-        float E[3];
-        Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
-            rgbMid, E, /*exposureScale*/ 1.0f,
-            (ws->tablesView.K > 0 ? &ws->tablesView : nullptr),
-            (ws->spdReady ? ws->spdSInv : nullptr),
-            ws->spdReady,
-            ws->sensB, ws->sensG, ws->sensR);
-
-        // Negative logE offsets are zero by design
-        const float logE_mid[3] = {
-            std::log10f(std::max(E[0], 1e-6f)),
-            std::log10f(std::max(E[1], 1e-6f)),
-            std::log10f(std::max(E[2], 1e-6f))
-        };
-
-        auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
-            if (c.lambda_nm.empty()) return le;
-            const float xmin = static_cast<float>(c.lambda_nm.front());
-            const float xmax = static_cast<float>(c.lambda_nm.back());
-            if (!std::isfinite(le)) return xmin;
-            if (le < xmin) return xmin;
-            if (le > xmax) return xmax;
-            return le;
-            };
-
-        float logE_clamped[3] = {
-            clamp_logE_to_curve(ws->densB, logE_mid[0]),
-            clamp_logE_to_curve(ws->densG, logE_mid[1]),
-            clamp_logE_to_curve(ws->densR, logE_mid[2]),
-        };
-
-        float D_neg[3];
-        D_neg[0] = Spectral::sample_density_at_logE(ws->densB, logE_clamped[0]); // Y
-        D_neg[1] = Spectral::sample_density_at_logE(ws->densG, logE_clamped[1]); // M
-        D_neg[2] = Spectral::sample_density_at_logE(ws->densR, logE_clamped[2]); // C
-
-        std::vector<float> Tneg, Ee_expose, Ee_filtered;
-
-        // Negative T from dyes (baseline included by ws.hasBaseline)
-        Print::negative_T_from_dyes(*ws, D_neg, Tneg);
-
-        // Enlarger illuminant exposure
-        Ee_expose.resize(Spectral::gShape.K);
-        for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float Ee = prt->illumEnlarger.linear.empty() ? 1.0f : prt->illumEnlarger.linear[i];
-            Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
-        }
-
-        // Use persisted neutral baselines from runtime, independent of current UI filter positions
-        double yN = prt->neutralY;
-        double mN = prt->neutralM;
-        double cN = prt->neutralC;
-
-        auto blend_filter = [](float curveVal, float amount)->float {
-            // AgX parity: optical density scaling → transmittance = curve^amount
-            const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
-            const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
-            return std::pow(c, a);
-            };
-
-        float yF = static_cast<float>(yN);
-        float mF = static_cast<float>(mN);
-        float cF = static_cast<float>(cN);
-
-        Ee_filtered.resize(Spectral::gShape.K);
-        for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_filter(prt->filterY.linear.empty() ? 1.0f : prt->filterY.linear[i], yF);
-            const float fM = blend_filter(prt->filterM.linear.empty() ? 1.0f : prt->filterM.linear[i], mF);
-            const float fC = blend_filter(prt->filterC.linear.empty() ? 1.0f : prt->filterC.linear[i], cF);
-            const float fTotal = (fY * fM * fC);
-            Ee_filtered[i] = (Ee_expose[i] > 0.0f && fTotal > 0.0f) ? (Ee_expose[i] * fTotal) : 0.0f;
-        }
-
-
-        float rawMid[3];
-        Print::raw_exposures_from_filtered_light(prt->profile, Ee_filtered, rawMid, ws->tablesView.deltaLambda);
-
-        // agx-emulsion parity: factor = 1 / raw_midgray_green (under neutral filters).
-        const float denom = std::max(1e-6f, rawMid[1]);
-        const float factor = 1.0f / denom;
-        return std::isfinite(factor) ? factor : 1.0f;
-    }
+    }  
 
 
     void onParamsPossiblyChanged(const char* changedNameOrNull);

@@ -40,9 +40,6 @@ namespace Print {
         float mFilter = 1.0f;
         float cFilter = 1.0f;    // optional
 
-        // Agx parity: print exposure compensation applies via green channel only.
-        // This factor multiplies raw[1] (green channel) before log10 and development.
-        float exposureCompGFactor = 1.0f;
         // Whether print exposure compensation is enabled in the UI.
         bool exposureCompensationEnabled = false;
         // Slider EV scale (2^EV) used for the mid-gray probe when compensation is enabled.
@@ -593,9 +590,9 @@ namespace Print {
             return std::min(std::max(le, xmin), xmax);
             };
         const float logE[3] = {
-            std::log10(std::max(E[0], 1e-6f)) + ws.logEOffB,
-            std::log10(std::max(E[1], 1e-6f)) + ws.logEOffG,
-            std::log10(std::max(E[2], 1e-6f)) + ws.logEOffR
+            std::log10(std::max(0.0f, E[0]) + 1e-10f) + ws.logEOffB,
+            std::log10(std::max(0.0f, E[1]) + 1e-10f) + ws.logEOffG,
+            std::log10(std::max(0.0f, E[2]) + 1e-10f) + ws.logEOffR
         };
         float logE_clamped[3] = {
             clamp_logE_to_curve(ws.densB, logE[0]),
@@ -651,7 +648,7 @@ namespace Print {
 
     // Build print densities from print exposures and per-channel offsets
     inline void print_densities_from_Eprint(const Profile& p, const float Eprint[3], float D_print[3]) {
-        auto safe_log10 = [](float v)->float { return std::log10(std::max(1e-6f, v)); };
+        auto safe_log10 = [](float v)->float { return std::log10(std::max(0.0f, v) + 1e-10f); };
         float lEy = safe_log10(Eprint[0]) + p.logEOffY;
         float lEm = safe_log10(Eprint[1]) + p.logEOffM;
         float lEc = safe_log10(Eprint[2]) + p.logEOffC;
@@ -903,14 +900,7 @@ namespace Print {
                 : 1.0f;
             const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
             raw[0] *= kMid; raw[1] *= kMid; raw[2] *= kMid;
-        }
-
-        if (prm.exposureCompensationEnabled) {
-            const float gFactor = (std::isfinite(prm.exposureCompGFactor) && prm.exposureCompGFactor > 0.0f)
-                ? prm.exposureCompGFactor
-                : 1.0f;
-            raw[1] *= gFactor;
-        }
+        }        
 
         // 6) RAW → print densities via DC curves and per-channel logE offsets
         float D_print[3] = { 0,0,0 };
@@ -980,9 +970,9 @@ namespace Print {
 
 
         float logE[3] = {
-            std::log10(std::max(E[0], 1e-6f)) + ws.logEOffB,
-            std::log10(std::max(E[1], 1e-6f)) + ws.logEOffG,
-            std::log10(std::max(E[2], 1e-6f)) + ws.logEOffR
+            std::log10(std::max(0.0f, E[0]) + 1e-10f) + ws.logEOffB,
+            std::log10(std::max(0.0f, E[1]) + 1e-10f) + ws.logEOffG,
+            std::log10(std::max(0.0f, E[2]) + 1e-10f) + ws.logEOffR
         };
 
         // Domain clamp helper before sample_ws usage
@@ -1067,18 +1057,11 @@ namespace Print {
             : 1.0f;
         const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
         raw[0] *= kMid; raw[1] *= kMid; raw[2] *= kMid;
-        if (prm.exposureCompensationEnabled) {
-            const float gFactor = (std::isfinite(prm.exposureCompGFactor) && prm.exposureCompGFactor > 0.0f)
-                ? prm.exposureCompGFactor
-                : 1.0f;
-            raw[1] *= gFactor;
-        }
-
 
 
         // Map raw to print densities via per-channel logE offsets and DC curves
         float D_print[3];
-        print_densities_from_Eprint(rt.profile, raw, D_print);        
+        print_densities_from_Eprint(rt.profile, raw, D_print);
 
         // 6) Print transmittance
         print_T_from_dyes(rt.profile, D_print, Tprint);
