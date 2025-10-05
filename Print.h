@@ -29,12 +29,29 @@ namespace Print {
         if (steps < 0.0f) {
             steps = 0.0f;
         }
-        if (steps <= 8.0f) {
+        if (steps <= 8.0f && steps >= -8.0f) {
             steps *= kEnlargerSteps;
         }
         const float normalized = std::clamp(steps / kEnlargerSteps, 0.0f, 4.0f);
         const float blended = 1.0f - (1.0f - c) * normalized;
         return std::clamp(blended, 0.0f, 1.0f);
+    }
+
+    inline float compose_dichroic_amount(float neutralAmount, float deltaAmount) {
+        auto amount_to_steps = [](float amount) -> float {
+            if (!std::isfinite(amount)) return 0.0f;
+            float steps = amount;
+            if (steps >= -8.0f && steps <= 8.0f) {
+                steps *= kEnlargerSteps;
+            }
+            const float limit = 4.0f * kEnlargerSteps;
+            return std::clamp(steps, -limit, limit);
+            };
+
+        const float neutralSteps = std::clamp(amount_to_steps(std::max(0.0f, neutralAmount)), 0.0f, 4.0f * kEnlargerSteps);
+        const float deltaSteps = amount_to_steps(deltaAmount);
+        const float totalSteps = std::clamp(neutralSteps + deltaSteps, 0.0f, 4.0f * kEnlargerSteps);
+        return totalSteps / kEnlargerSteps;
     }
 
     struct Profile {
@@ -53,9 +70,9 @@ namespace Print {
     struct Params {
         bool bypass = false;     // if true, bypass print (show negative)
         float exposure = 1.0f;   // enlarger exposure scalar
-        float yFilter = 1.0f;    // neutral filter scalars (MVP)
-        float mFilter = 1.0f;
-        float cFilter = 1.0f;    // optional
+        float yFilter = 0.0f;    // delta from neutral baseline (Durst wheel steps scaled by 170)
+        float mFilter = 0.0f;
+        float cFilter = 0.0f;    // optional
 
         // Whether print exposure compensation is enabled in the UI.
         bool exposureCompensationEnabled = false;
@@ -663,15 +680,13 @@ namespace Print {
 
         // 6) Apply Y/M/C dichroic filters using Durst wheel linear blending (agx parity)
         Ee_filtered.resize(Spectral::gShape.K);
-        auto blend_filter = [](float curveVal, float amount)->float {
-            const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
-            const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
-            return std::pow(c, a);
-            };
+        const float yAmount = compose_dichroic_amount(rt.neutralY, prm.yFilter);
+        const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
+        const float cAmount = compose_dichroic_amount(rt.neutralC, prm.cFilter)
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
-            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
-            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
+            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
+            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
+            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], cAmount);
             const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
@@ -915,11 +930,14 @@ namespace Print {
         }
 
         // 4) Apply neutral Y/M/C dichroic filters to enlarger light
-        Ee_filtered.resize(Spectral::gShape.K);        
+        Ee_filtered.resize(Spectral::gShape.K);
+        const float yAmount = compose_dichroic_amount(rt.neutralY, prm.yFilter);
+        const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
+        const float cAmount = compose_dichroic_amount(rt.neutralC, prm.cFilter);
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
-            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
-            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
+            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
+            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
+            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], cAmount);
             const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
@@ -1060,11 +1078,14 @@ namespace Print {
         // Apply spectral Y/M/C dichroic filters to enlarger light before per-channel reduction
         thread_local std::vector<float> Ee_filtered;
         Ee_filtered.resize(Spectral::gShape.K);
+        const float yAmount = compose_dichroic_amount(rt.neutralY, prm.yFilter);
+        const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
+        const float cAmount = compose_dichroic_amount(rt.neutralC, prm.cFilter);
         // Blend each wheel between identity (1.0) and its full transmittance curve
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
-            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
-            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
+            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
+            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
+            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], cAmount);
             const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }

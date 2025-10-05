@@ -1317,6 +1317,11 @@ public:
             : nullptr;
         const Print::Runtime* prt = (ws && ws->buildCounter > 0 && ws->printRT) ? ws->printRT.get() : nullptr;
 
+        if (prt) {
+            printParams.yFilter -= prt->neutralY;
+            printParams.mFilter -= prt->neutralM;
+            printParams.cFilter -= prt->neutralC;
+        }
 
         const bool wsReady = (ws && ws->buildCounter > 0 &&
             ws->tablesView.K == Spectral::gShape.K &&
@@ -1472,9 +1477,9 @@ private:
             Print::Params prm;
             prm.bypass = false;
             prm.exposure = (float)pexp;
-            prm.yFilter = fY;
-            prm.mFilter = fM;
-            prm.cFilter = 1.0f;
+            prm.yFilter = fY - prt->neutralY;
+            prm.mFilter = fM - prt->neutralM;
+            prm.cFilter = fC - prt->neutralC;
 
             float rgbOut[3] = { rgbMid[0], rgbMid[1], rgbMid[2] };
             // Safe call path mirrors JuicerProcessing fallback (non-spatial) compute

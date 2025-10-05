@@ -461,21 +461,19 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
 
                     // 3) Apply spectral dichroic filters with Y/M/C neutral values (agx density-as-OD)
                     Ee_filtered.resize(size_t(K));
-                    auto blend_filter = [](float curveVal, float amount)->float {
-                        const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
-                        const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
-                        return std::pow(c, a);
-                        };
+                    const float yAmount = Print::compose_dichroic_amount(_prt->neutralY, _printParams.yFilter);
+                    const float mAmount = Print::compose_dichroic_amount(_prt->neutralM, _printParams.mFilter);
+                    const float cAmount = Print::compose_dichroic_amount(_prt->neutralC, _printParams.cFilter);
                     for (int i = 0; i < K; ++i) {
-                        const float fY = blend_filter(
+                        const float fY = Print::blend_dichroic_filter_linear(
                             (_prt->filterY.linear.size() > size_t(i)) ? _prt->filterY.linear[i] : 1.0f,
-                            _printParams.yFilter);
-                        const float fM = blend_filter(
+                            yAmount);
+                        const float fM = Print::blend_dichroic_filter_linear(
                             (_prt->filterM.linear.size() > size_t(i)) ? _prt->filterM.linear[i] : 1.0f,
-                            _printParams.mFilter);
-                        const float fC = blend_filter(
+                            mAmount);
+                        const float fC = Print::blend_dichroic_filter_linear(
                             (_prt->filterC.linear.size() > size_t(i)) ? _prt->filterC.linear[i] : 1.0f,
-                            _printParams.cFilter);
+                            cAmount);
                         const float fTotal = fY * fM * fC;
                         Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
                     }
