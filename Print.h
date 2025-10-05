@@ -544,8 +544,7 @@ namespace Print {
     // MVP: derive print channel exposures E_print[3] from Ee_expose(λ) using print dye extinctions as proxies
     inline void exposures_for_print_channels(const Runtime& rt,
         const std::vector<float>& Ee_expose,
-        float Eprint[3],
-        float deltaLambda)   
+        float Eprint[3])
     {
         const int K = Spectral::gShape.K;
         double Ec = 0.0, Em = 0.0, Ey = 0.0;
@@ -561,19 +560,16 @@ namespace Print {
             Ey += static_cast<double>(e) * static_cast<double>(ly);
         }
 
-        const double dl = static_cast<double>(deltaLambda);
-
-        Eprint[0] = std::max(0.0f, static_cast<float>(Ey * dl)); // Y
-        Eprint[1] = std::max(0.0f, static_cast<float>(Em * dl)); // M
-        Eprint[2] = std::max(0.0f, static_cast<float>(Ec * dl)); // C
+        Eprint[0] = std::max(0.0f, static_cast<float>(Ey)); // Y
+        Eprint[1] = std::max(0.0f, static_cast<float>(Em)); // M
+        Eprint[2] = std::max(0.0f, static_cast<float>(Ec)); // C
     }
 
     // Compute per-channel raw exposures via spectral sensitivity contraction:
     inline void raw_exposures_from_filtered_light(
         const Profile& p,
         const std::vector<float>& Ee_filtered,
-        float raw[3],
-        float deltaLambda)
+        float raw[3])
     {
         // Convert log10 sensitivities to linear sensitivity per wavelength
         const int K = Spectral::gShape.K;
@@ -588,10 +584,10 @@ namespace Print {
             rM += static_cast<double>(e) * static_cast<double>(sM);
             rC += static_cast<double>(e) * static_cast<double>(sC);
         }
-        const double dl = static_cast<double>(deltaLambda);
-        raw[0] = std::max(0.0f, static_cast<float>(rY * dl)); // Y
-        raw[1] = std::max(0.0f, static_cast<float>(rM * dl)); // M
-        raw[2] = std::max(0.0f, static_cast<float>(rC * dl)); // C
+
+        raw[0] = std::max(0.0f, static_cast<float>(rY)); // Y
+        raw[1] = std::max(0.0f, static_cast<float>(rM)); // M
+        raw[2] = std::max(0.0f, static_cast<float>(rC)); // C
     }
 
     inline void compute_preflash_raw(
@@ -629,7 +625,7 @@ namespace Print {
             Ee_pre[i] = std::max(0.0f, Ee * t * fTotal);
         }
 
-        raw_exposures_from_filtered_light(rt.profile, Ee_pre, rawOut, ws.tablesView.deltaLambda);
+        raw_exposures_from_filtered_light(rt.profile, Ee_pre, rawOut);
     }
 
     // Midgray compensation factor computed spectrally (AgX parity): always normalize RAW so a neutral mid-gray is
@@ -712,7 +708,7 @@ namespace Print {
 
         // 7) RAW via print paper sensitivities (log domain → linear sensitivity)
         float raw[3];
-        raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
+        raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw);
 
         // 8) Factor is inverse of midgray green RAW; guard for tiny values
         const float g = std::max(1e-12f, raw[1]);
@@ -782,8 +778,7 @@ namespace Print {
             for (int i = 0; i < K; ++i) {
                 const double sLin = std::pow(10.0, (double)sensLog.linear[i]);
                 g += sLin * (double)T.Ybar[i];
-            }
-            g *= (double)T.deltaLambda;
+            }            
             return std::max(1e-12, g);
             };
 
@@ -902,7 +897,7 @@ namespace Print {
 
         // 5) Contract to channel RAW using print sensitometries
         float raw[3] = { 0,0,0 };
-        raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
+        raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw);
 
         // Apply print exposure (agx parity)
         const float expPrint = std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;
@@ -1059,7 +1054,7 @@ namespace Print {
 
         // Compute per-channel raw via sensitivity contraction (agx parity)
         float raw[3];
-        raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw, ws.tablesView.deltaLambda);
+        raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw);
 
         // Apply print exposure scaling to raw (agx: raw *= print_exposure)
         const float expPrint = std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;        

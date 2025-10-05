@@ -482,7 +482,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     // 4) Contract to per-channel raw exposures using print paper sensitivities
                     float raw[3];
                     Print::raw_exposures_from_filtered_light(
-                        _prt->profile, Ee_filtered, raw, _ws->tablesView.deltaLambda);
+                        _prt->profile, Ee_filtered, raw);
 
                     // 5) Apply print exposure ONCE (agx: raw *= exposure) + midgray compensation (vector)
                     const float rawScale = _printParams.exposure * kMid_spectral;
