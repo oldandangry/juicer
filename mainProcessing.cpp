@@ -355,7 +355,10 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
         scrubClamp(aC_blur);
 
         // Precompute spectral midgray factor once (AgX parity), constant across the tile.
-        const float kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, _exposureScale);
+        const float exposureCompScale = _printParams.exposureCompensationEnabled
+            ? _printParams.exposureCompensationScale
+            : 1.0f;
+        const float kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale);
 
         // Pass B
         for (int yy = 0; yy < tileH; ++yy) {

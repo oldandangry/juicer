@@ -1171,7 +1171,10 @@ public:
         if (_pExposure) _pExposure->getValue(exposureSliderEV);
 
         // Defer composing exposureScale until after the auto-exposure block.
-        float exposureScale = 1.0f;
+        float exposureSliderScale = 1.0f;
+        if (std::isfinite(exposureSliderEV)) {
+            exposureSliderScale = static_cast<float>(std::pow(2.0, exposureSliderEV));
+        }
 
 
         // Prepare branch params
@@ -1344,6 +1347,9 @@ public:
         {
             bool printComp = false;
             if (_pPrintExposureComp) { bool pc = false; _pPrintExposureComp->getValue(pc); printComp = pc; }
+
+            printParams.exposureCompensationEnabled = printComp;
+            printParams.exposureCompensationScale = printComp ? exposureSliderScale : 1.0f;
 
             if (printComp && printReady && !printParams.bypass) {
                 // Use camera exposure compensation EV (slider) only to derive the mid-gray factor under neutral filters.

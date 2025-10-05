@@ -43,6 +43,10 @@ namespace Print {
         // Agx parity: print exposure compensation applies via green channel only.
         // This factor multiplies raw[1] (green channel) before log10 and development.
         float exposureCompGFactor = 1.0f;
+        // Whether print exposure compensation is enabled in the UI.
+        bool exposureCompensationEnabled = false;
+        // Slider EV scale (2^EV) used for the mid-gray probe when compensation is enabled.
+        float exposureCompensationScale = 1.0f;
     };
 
 
@@ -550,17 +554,20 @@ namespace Print {
         raw[2] = std::max(0.0f, static_cast<float>(rC * dl)); // C
     }
 
-    // Midgray compensation factor computed spectrally (AgX parity): scale RAW so that mid-gray (green channel)
-    // remains invariant under camera exposure compensation EV. This uses the same negative development,
-    // enlarger illuminant (including dichroic filters), and print paper sensitivities as the print leg.
+    // Midgray compensation factor computed spectrally (AgX parity): when enabled, scale RAW so that mid-gray
+    // (green channel) remains invariant under the camera exposure *slider* EV. This uses the same negative
+    // development, enlarger illuminant (including dichroic filters), and print paper sensitivities as the print leg.
     inline float compute_exposure_factor_midgray(
         const WorkingState& ws,
         const Runtime& rt,
         const Params& prm,
-        float cameraExposureScale)
+        float exposureCompScale)
     {
-        // If EV not meaningful, no compensation.
-        if (!std::isfinite(cameraExposureScale) || cameraExposureScale <= 0.0f) return 1.0f;
+        // Only active when the UI toggle is enabled.
+        if (!prm.exposureCompensationEnabled) return 1.0f;
+
+        // If slider EV scale is not meaningful, skip compensation.
+        if (!std::isfinite(exposureCompScale) || exposureCompScale <= 0.0f) return 1.0f;
 
         // 1) Midgray DWG rgb at canonical brightness (AgX parity: constant 18.4% reflectance)
         const float rgbMid[3] = { 0.184f, 0.184f, 0.184f };
@@ -576,7 +583,7 @@ namespace Print {
             (ws.spdReady ? ws.spdSInv : nullptr),
             ws.spdReady,
             ws.sensB, ws.sensG, ws.sensR);
-        E[0] *= cameraExposureScale; E[1] *= cameraExposureScale; E[2] *= cameraExposureScale;
+        E[0] *= exposureCompScale; E[1] *= exposureCompScale; E[2] *= exposureCompScale;
 
         // 3) LogE with per-layer offsets, clamp to domain, sample negative densities
         auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
@@ -892,8 +899,18 @@ namespace Print {
 
         // Midgray compensation (AgX parity): scale RAW vector by spectral midgray factor from camera EV.
         {
-            const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureScale);
+            const float exposureCompScale = prm.exposureCompensationEnabled
+                ? prm.exposureCompensationScale
+                : 1.0f;
+            const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
             raw[0] *= kMid; raw[1] *= kMid; raw[2] *= kMid;
+        }
+
+        if (prm.exposureCompensationEnabled) {
+            const float gFactor = (std::isfinite(prm.exposureCompGFactor) && prm.exposureCompGFactor > 0.0f)
+                ? prm.exposureCompGFactor
+                : 1.0f;
+            raw[1] *= gFactor;
         }
 
         // 6) RAW → print densities via DC curves and per-channel logE offsets
@@ -1046,8 +1063,17 @@ namespace Print {
 
         // Spectral midgray compensation (AgX parity): scale RAW vector by factor = 1 / RAW_midgray_green.
         // Compute once per call, independent of pixel content.
-        const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureScale);
+        const float exposureCompScale = prm.exposureCompensationEnabled
+            ? prm.exposureCompensationScale
+            : 1.0f;
+        const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
         raw[0] *= kMid; raw[1] *= kMid; raw[2] *= kMid;
+        if (prm.exposureCompensationEnabled) {
+            const float gFactor = (std::isfinite(prm.exposureCompGFactor) && prm.exposureCompGFactor > 0.0f)
+                ? prm.exposureCompGFactor
+                : 1.0f;
+            raw[1] *= gFactor;
+        }
 
 
 
