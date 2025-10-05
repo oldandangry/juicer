@@ -682,7 +682,7 @@ namespace Print {
         Ee_filtered.resize(Spectral::gShape.K);
         const float yAmount = compose_dichroic_amount(rt.neutralY, prm.yFilter);
         const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
-        const float cAmount = compose_dichroic_amount(rt.neutralC, prm.cFilter)
+        const float cAmount = compose_dichroic_amount(rt.neutralC, prm.cFilter);
         for (int i = 0; i < Spectral::gShape.K; ++i) {
             const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
             const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
