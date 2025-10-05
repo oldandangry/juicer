@@ -59,8 +59,7 @@ namespace Print {
         float exposure = 1.0f;   // enlarger exposure scalar
         float preflashExposure = 0.0f; // additional uniform print exposure (linear scale)
         float yFilter = 0.0f;    // delta from neutral baseline in Durst steps (±170)
-        float mFilter = 0.0f;
-        float cFilter = 0.0f;    // optional
+        float mFilter = 0.0f;        
 
         // Whether print exposure compensation is enabled in the UI.
         bool exposureCompensationEnabled = false;
@@ -697,7 +696,7 @@ namespace Print {
         Ee_filtered.resize(Spectral::gShape.K);
         const float yAmount = compose_dichroic_amount(rt.neutralY, prm.yFilter);
         const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
-        const float cAmount = compose_dichroic_amount(rt.neutralC, prm.cFilter);
+        const float cAmount = compose_dichroic_amount(rt.neutralC, 0.0f);
         for (int i = 0; i < Spectral::gShape.K; ++i) {
             const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
             const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
@@ -823,7 +822,7 @@ namespace Print {
         Ee_filtered.resize(Spectral::gShape.K);
         const float yAmount = compose_dichroic_amount(rt.neutralY, prm.yFilter);
         const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
-        const float cAmount = compose_dichroic_amount(rt.neutralC, prm.cFilter);
+        const float cAmount = compose_dichroic_amount(rt.neutralC, 0.0f);
         for (int i = 0; i < Spectral::gShape.K; ++i) {
             const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
             const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
@@ -979,7 +978,7 @@ namespace Print {
         Ee_filtered.resize(Spectral::gShape.K);
         const float yAmount = compose_dichroic_amount(rt.neutralY, prm.yFilter);
         const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
-        const float cAmount = compose_dichroic_amount(rt.neutralC, prm.cFilter);
+        const float cAmount = compose_dichroic_amount(rt.neutralC, 0.0f);
         // Blend each wheel between identity (1.0) and its full transmittance curve
         for (int i = 0; i < Spectral::gShape.K; ++i) {
             const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);

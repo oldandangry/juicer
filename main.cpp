@@ -1086,8 +1086,7 @@ public:
             _pPrintPreflash = fetchDoubleParam("PrintPreflash");
             _pPrintExposureComp = fetchBooleanParam("PrintExposureCompensation");
             _pEnlargerY = fetchDoubleParam("EnlargerY");
-            _pEnlargerM = fetchDoubleParam("EnlargerM");
-            _pEnlargerC = fetchDoubleParam("EnlargerC");
+            _pEnlargerM = fetchDoubleParam("EnlargerM");            
         }
         catch (...) {
             // Safe: any missing param will remain nullptr and defaults are used in snapshot/usage paths.
@@ -1173,13 +1172,12 @@ public:
         Print::Params printParams;
         {
             bool bypass = true;
-            double pexp = 1.0, preflash = 0.0, y = 1.0, m = 1.0, c = 1.0;
+            double pexp = 1.0, preflash = 0.0, y = 1.0, m = 1.0;
             if (_pPrintBypass)   _pPrintBypass->getValue(bypass);
             if (_pPrintExposure) _pPrintExposure->getValue(pexp);
             if (_pPrintPreflash) _pPrintPreflash->getValue(preflash);
             if (_pEnlargerY)     _pEnlargerY->getValue(y);
-            if (_pEnlargerM)     _pEnlargerM->getValue(m);
-            if (_pEnlargerC)     _pEnlargerC->getValue(c);
+            if (_pEnlargerM)     _pEnlargerM->getValue(m);            
             auto clampShift = [](double v) -> double {
                 if (!std::isfinite(v)) return 0.0;
                 const double limit = static_cast<double>(Print::kEnlargerSteps);
@@ -1189,8 +1187,7 @@ public:
             printParams.exposure = static_cast<float>(pexp);
             printParams.preflashExposure = static_cast<float>(preflash);
             printParams.yFilter = static_cast<float>(clampShift(y));
-            printParams.mFilter = static_cast<float>(clampShift(m));
-            printParams.cFilter = static_cast<float>(clampShift(c));
+            printParams.mFilter = static_cast<float>(clampShift(m));            
         }
 
         // --- Auto exposure compensation (camera) and print exposure compensation ---
@@ -1400,8 +1397,7 @@ private:
     OFX::DoubleParam* _pPrintPreflash = nullptr;
     OFX::BooleanParam* _pPrintExposureComp = nullptr;
     OFX::DoubleParam* _pEnlargerY = nullptr;
-    OFX::DoubleParam* _pEnlargerM = nullptr;
-    OFX::DoubleParam* _pEnlargerC = nullptr;
+    OFX::DoubleParam* _pEnlargerM = nullptr;    
 
     std::unique_ptr<InstanceState> _state; // owned per instance
 
@@ -1427,255 +1423,6 @@ private:
 #endif
         return P;
     }
-
-    // Insert directly above: void onParamsPossiblyChanged(const char* changedNameOrNull);
-    void fitNeutralEnlargerFilters() {
-        if (!_state || !_state->baseLoaded) return;
-        const WorkingState* ws = _state->activeWS.load(std::memory_order_acquire);
-        const Print::Runtime* prt = (ws && ws->buildCounter > 0 && ws->printRT) ? ws->printRT.get() : nullptr;
-        if (!ws || !prt) return;
-        if (!Print::profile_is_valid(prt->profile)) return;
-        if (prt->illumView.linear.size() != (size_t)Spectral::gShape.K ||
-            prt->illumEnlarger.linear.size() != (size_t)Spectral::gShape.K) return;
-
-        
-        const double exposureSeed = 1.0;
-
-        const float neutralY = std::clamp(prt->neutralY, 0.0f, 1.0f);
-        const float neutralM = std::clamp(prt->neutralM, 0.0f, 1.0f);
-        const float neutralC = std::clamp(prt->neutralC, 0.0f, 1.0f);
-
-        struct Variables {
-            double y;
-            double m;
-            double exposure;
-        };
-        
-        const float rgbMid[3] = { 0.184f, 0.184f, 0.184f };
-
-        auto evaluate_rgb = [&](const Variables& vars, float rgbOut[3]) -> bool {
-            Print::Runtime rtCandidate = *prt;
-            rtCandidate.neutralY = static_cast<float>(std::clamp(vars.y, 0.0, 1.0));
-            rtCandidate.neutralM = static_cast<float>(std::clamp(vars.m, 0.0, 1.0));
-            rtCandidate.neutralC = neutralC;
-
-            Print::Params prm{};
-            prm.bypass = false;
-            prm.exposure = static_cast<float>(std::max(vars.exposure, 0.0));
-            prm.preflashExposure = 0.0f;
-            prm.yFilter = 0.0f;
-            prm.mFilter = 0.0f;
-            prm.cFilter = 0.0f;
-
-            float rgbTmp[3] = { rgbMid[0], rgbMid[1], rgbMid[2] };
-            Print::simulate_print_pixel(rgbMid, prm, rtCandidate, ws->dirRT, *ws, 1.0f, rgbTmp);
-            if (!std::isfinite(rgbTmp[0]) || !std::isfinite(rgbTmp[1]) || !std::isfinite(rgbTmp[2])) {
-                return false;
-            }
-            rgbOut[0] = rgbTmp[0];
-            rgbOut[1] = rgbTmp[1];
-            rgbOut[2] = rgbTmp[2];
-            return true;
-            };
-
-        auto residual_cost = [&](const float rgb[3]) {
-            const double r0 = static_cast<double>(rgb[0]) - rgbMid[0];
-            const double r1 = static_cast<double>(rgb[1]) - rgbMid[1];
-            const double r2 = static_cast<double>(rgb[2]) - rgbMid[2];
-            return 0.5 * (r0 * r0 + r1 * r1 + r2 * r2);
-            };
-
-        auto clamp_vars = [](const Variables& v) {
-            Variables out = v;
-            out.y = std::clamp(out.y, 0.0, 1.0);
-            out.m = std::clamp(out.m, 0.0, 1.0);
-            out.exposure = std::clamp(out.exposure, 0.0, 10.0);
-            return out;
-            };
-
-        Variables current{ neutralY, neutralM, exposureSeed };
-        float rgbCurrent[3];
-        if (!evaluate_rgb(current, rgbCurrent)) {
-            return;
-        }
-        double bestCost = residual_cost(rgbCurrent);
-        Variables best = current;
-        float rgbBest[3] = { rgbCurrent[0], rgbCurrent[1], rgbCurrent[2] };
-
-        const int kMaxIter = 25;
-        double lambda = 1e-2;
-
-        auto compute_jacobian = [&](const Variables& vars, const float baseRgb[3], double J[3][3]) -> bool {
-            const double stepY = 1e-4;
-            const double stepM = 1e-4;
-            const double stepExp = 1e-3;
-
-            auto forward_diff = [&](Variables perturbed, double step, int col) -> bool {
-                float rgbPert[3];
-                if (!evaluate_rgb(perturbed, rgbPert)) {
-                    return false;
-                }
-                for (int row = 0; row < 3; ++row) {
-                    J[row][col] = (static_cast<double>(rgbPert[row]) - baseRgb[row]) / step;
-                }
-                return true;
-                };
-
-            Variables vy = vars;
-            vy.y = std::clamp(vy.y + stepY, 0.0, 1.0);
-            if (!forward_diff(vy, stepY, 0)) return false;
-
-            Variables vm = vars;
-            vm.m = std::clamp(vm.m + stepM, 0.0, 1.0);
-            if (!forward_diff(vm, stepM, 1)) return false;
-
-            Variables ve = vars;
-            ve.exposure = std::max(0.0, ve.exposure + stepExp);
-            if (!forward_diff(ve, stepExp, 2)) return false;
-            return true;
-            };
-
-        auto solve_linear = [](double A[3][3], double b[3], double x[3]) -> bool {
-            double mat[3][4];
-            for (int r = 0; r < 3; ++r) {
-                for (int c = 0; c < 3; ++c) {
-                    mat[r][c] = A[r][c];
-                }
-                mat[r][3] = b[r];
-            }
-            for (int i = 0; i < 3; ++i) {
-                int pivot = i;
-                double maxVal = std::abs(mat[i][i]);
-                for (int r = i + 1; r < 3; ++r) {
-                    const double v = std::abs(mat[r][i]);
-                    if (v > maxVal) {
-                        maxVal = v;
-                        pivot = r;
-                    }
-                }
-                if (maxVal < 1e-12) {
-                    return false;
-                }
-                if (pivot != i) {
-                    std::swap(mat[pivot], mat[i]);
-                }
-                const double invDiag = 1.0 / mat[i][i];
-                for (int c = i; c < 4; ++c) {
-                    mat[i][c] *= invDiag;
-                }
-                for (int r = 0; r < 3; ++r) {
-                    if (r == i) continue;
-                    const double factor = mat[r][i];
-                    for (int c = i; c < 4; ++c) {
-                        mat[r][c] -= factor * mat[i][c];
-                    }
-                }
-            }
-            for (int i = 0; i < 3; ++i) {
-                x[i] = mat[i][3];
-            }
-            return true;
-            };
-
-        for (int iter = 0; iter < kMaxIter; ++iter) {
-            double J[3][3];
-            if (!compute_jacobian(current, rgbCurrent, J)) {
-                break;
-            }
-
-            double JTJ[3][3] = { 0 };
-            double JTr[3] = { 0 };
-            double residual[3] = {
-                static_cast<double>(rgbCurrent[0]) - rgbMid[0],
-                static_cast<double>(rgbCurrent[1]) - rgbMid[1],
-                static_cast<double>(rgbCurrent[2]) - rgbMid[2]
-            };
-
-            for (int row = 0; row < 3; ++row) {
-                for (int col = 0; col < 3; ++col) {
-                    for (int k = 0; k < 3; ++k) {
-                        JTJ[col][k] += J[row][col] * J[row][k];
-                    }
-                }
-                for (int col = 0; col < 3; ++col) {
-                    JTr[col] += J[row][col] * residual[row];
-                }
-            }
-
-            bool stepAccepted = false;
-            for (int attempt = 0; attempt < 8; ++attempt) {
-                double A[3][3];
-                for (int r = 0; r < 3; ++r) {
-                    for (int c = 0; c < 3; ++c) {
-                        A[r][c] = JTJ[r][c];
-                    }
-                    A[r][r] += lambda;
-                }
-                double rhs[3] = { -JTr[0], -JTr[1], -JTr[2] };
-                double delta[3];
-                if (!solve_linear(A, rhs, delta)) {
-                    lambda *= 10.0;
-                    continue;
-                }
-                Variables candidate{
-                    current.y + delta[0],
-                    current.m + delta[1],
-                    current.exposure + delta[2]
-                };
-                candidate = clamp_vars(candidate);
-
-                float rgbCand[3];
-                if (!evaluate_rgb(candidate, rgbCand)) {
-                    lambda *= 10.0;
-                    continue;
-                }
-                const double candCost = residual_cost(rgbCand);
-                if (candCost < bestCost) {
-                    bestCost = candCost;
-                    best = candidate;
-                    rgbBest[0] = rgbCand[0];
-                    rgbBest[1] = rgbCand[1];
-                    rgbBest[2] = rgbCand[2];
-                    current = candidate;
-                    rgbCurrent[0] = rgbCand[0];
-                    rgbCurrent[1] = rgbCand[1];
-                    rgbCurrent[2] = rgbCand[2];
-                    lambda = std::max(lambda * 0.3, 1e-6);
-                    stepAccepted = true;
-                    break;
-                }
-                lambda *= 5.0;
-            }
-
-            if (!stepAccepted || bestCost < 1e-8) {
-                break;
-            }
-        }
-
-        const float fittedY = static_cast<float>(best.y);
-        const float fittedM = static_cast<float>(best.m);
-        const float fittedExposure = static_cast<float>(best.exposure);
-        const float fittedC = neutralC;
-
-        if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-        if (_pEnlargerM) _pEnlargerM->setValue(0.0);
-        if (_pEnlargerC) _pEnlargerC->setValue(0.0);
-        if (_pPrintExposure) _pPrintExposure->setValue(fittedExposure);
-
-        _state->printRT.neutralY = fittedY;
-        _state->printRT.neutralM = fittedM;
-        _state->printRT.neutralC = fittedC;
-
-        if (ws && ws->printRT) {
-            Print::Runtime* mutableRT = ws->printRT.get();
-            if (mutableRT) {
-                mutableRT->neutralY = fittedY;
-                mutableRT->neutralM = fittedM;
-                mutableRT->neutralC = fittedC;
-            }
-        }
-    }      
-
 
     void onParamsPossiblyChanged(const char* changedNameOrNull);
     void bootstrap_after_attach();
@@ -1730,8 +1477,7 @@ void JuicerEffect::bootstrap_after_attach() {
             if (load_enlarger_neutral_filters(jsonPath, paperKeyLocal, "TH-KG3-L", negKey, ymc)) {
                 float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
                 if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
-                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
                 JTRACE("PRINT", "Applied neutral filters (JSON) Y/M/C=" + std::to_string(y) + "/" + std::to_string(m) + "/" + std::to_string(c));
                 if (_pPrintExposureComp) _pPrintExposureComp->setValue(true);
 
@@ -1746,8 +1492,7 @@ void JuicerEffect::bootstrap_after_attach() {
                 // Fallback: use baked-in neutral defaults when JSON data is unavailable
                 const float yDef = 0.9f, mDef = 0.5f, cDef = 0.35f;
                 if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
-                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
                 _state->printRT.neutralY = yDef;
                 _state->printRT.neutralM = mDef;
                 _state->printRT.neutralC = cDef;
@@ -1822,8 +1567,7 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
 
                 _state->suppressParamEvents = true; // prevent recursion
                 if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
-                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
                 _state->suppressParamEvents = false;
 
                 JTRACE("PRINT", "Re-applied neutral filters (JSON) Y/M/C="
@@ -1841,8 +1585,7 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
                 const float yDef = 0.96f, mDef = 0.69f, cDef = 0.35f;
                 _state->suppressParamEvents = true;
                 if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
-                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
                 _state->suppressParamEvents = false;
                 _state->printRT.neutralY = yDef;
                 _state->printRT.neutralM = mDef;
@@ -1878,8 +1621,7 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
                 float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
                 _state->suppressParamEvents = true;
                 if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);
-                if (_pEnlargerC) _pEnlargerC->setValue(0.0);
+                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
                 _state->suppressParamEvents = false;
                 JTRACE("PRINT", "Re-applied neutral filters after stock change Y/M/C=" + std::to_string(y) + "/" + std::to_string(m) + "/" + std::to_string(c));
             }
@@ -1927,16 +1669,9 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
             }
         }
     }
-#endif
-
-    if (changedNameOrNull && std::strcmp(changedNameOrNull, "PrintFitNeutral") == 0) {
-        // Fit and set neutral Y/M/C enlarger filters to remove gross blue/cyan bias
-        fitNeutralEnlargerFilters();
-    }
+#endif    
 
 }
-// HIDDEN MESSAGE KUKHUVUD
-
 
 // === Resolve support library factory (Step 1) ===
 // The factory owns the plugin identity and wires descriptor/instance creation.
@@ -2176,15 +1911,7 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
             p->setDisplayRange(-Print::kEnlargerSteps, Print::kEnlargerSteps);
             p->setIncrement(1.0);
             if (grpPrint) p->setParent(*grpPrint);
-        }
-        {
-            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam("EnlargerC");
-            p->setLabel("Enlarger C");
-            p->setDefault(0.0);
-            p->setDisplayRange(-Print::kEnlargerSteps, Print::kEnlargerSteps);
-            p->setIncrement(1.0);
-            if (grpPrint) p->setParent(*grpPrint);
-        }
+        }        
         {
             OFX::PushButtonParamDescriptor* p = desc.definePushButtonParam("PrintFitNeutral");
             p->setLabel("Fit neutral");

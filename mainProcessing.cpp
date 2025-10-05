@@ -464,7 +464,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     Ee_filtered.resize(size_t(K));
                     const float yAmount = Print::compose_dichroic_amount(_prt->neutralY, _printParams.yFilter);
                     const float mAmount = Print::compose_dichroic_amount(_prt->neutralM, _printParams.mFilter);
-                    const float cAmount = Print::compose_dichroic_amount(_prt->neutralC, _printParams.cFilter);
+                    const float cAmount = Print::compose_dichroic_amount(_prt->neutralC, 0.0f);
                     for (int i = 0; i < K; ++i) {
                         const float fY = Print::blend_dichroic_filter_linear(
                             (_prt->filterY.linear.size() > size_t(i)) ? _prt->filterY.linear[i] : 1.0f,
