@@ -7,6 +7,7 @@
 #include "SpectralMath.h"
 #include "Illuminants.h"
 #include "WorkingState.h"
+#include "ProfileJSONLoader.h"
 #include <sstream>
 #include <algorithm>
 
@@ -19,6 +20,22 @@ namespace JuicerTrace {
 struct WorkingState;
 
 namespace Print {
+
+    constexpr float kEnlargerSteps = 170.0f;
+
+    inline float blend_dichroic_filter_linear(float curveVal, float amount) {
+        const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 0.0f, 1.0f) : 1.0f;
+        float steps = std::isfinite(amount) ? amount : 0.0f;
+        if (steps < 0.0f) {
+            steps = 0.0f;
+        }
+        if (steps <= 8.0f) {
+            steps *= kEnlargerSteps;
+        }
+        const float normalized = std::clamp(steps / kEnlargerSteps, 0.0f, 4.0f);
+        const float blended = 1.0f - (1.0f - c) * normalized;
+        return std::clamp(blended, 0.0f, 1.0f);
+    }
 
     struct Profile {
         Spectral::Curve epsC, epsM, epsY;     // print dye extinction (OD/λ)
@@ -104,7 +121,7 @@ namespace Print {
         return true;
     }
     //HIDDEN MESSAGE - I NEVER READ THE CODE
-    inline void load_profile_from_dir(const std::string& dir, Profile& out) {
+    inline void load_profile_from_dir(const std::string& dir, Profile& out, const std::string& jsonProfilePath = std::string()) {
         using Spectral::load_csv_pairs;
         using Spectral::build_curve_on_shape_from_linear_pairs;
         using Spectral::build_curve_on_shape_from_log10_pairs;
@@ -307,18 +324,46 @@ namespace Print {
             bmid.clear(); // missing is OK
         }
 
-        // Pad baselines to match the current spectral shape domain if present
-        if (!bmin.empty()) pad_to_shape_domain(bmin);
-        if (!bmid.empty()) pad_to_shape_domain(bmid);
+        std::vector<std::pair<float, float>> jsonBaseMin;
+        std::vector<std::pair<float, float>> jsonBaseMid;
+        float baselineScale = 1.0f;
+        if (!jsonProfilePath.empty()) {
+            Profiles::AgxFilmProfile profileJson;
+            if (Profiles::load_agx_film_profile_json(jsonProfilePath, profileJson)) {
+                baselineScale = std::isfinite(profileJson.dyeDensityMinFactor)
+                    ? profileJson.dyeDensityMinFactor
+                    : 1.0f;
+                jsonBaseMin = std::move(profileJson.baseMin);
+                jsonBaseMid = std::move(profileJson.baseMid);
+            }
+        }
+
+        auto baselineMinPairs = std::move(bmin);
+        auto baselineMidPairs = std::move(bmid);
+        if (baselineMinPairs.empty() && !jsonBaseMin.empty()) {
+            baselineMinPairs = std::move(jsonBaseMin);
+        }
+        if (baselineMidPairs.empty() && !jsonBaseMid.empty()) {
+            baselineMidPairs = std::move(jsonBaseMid);
+        }
+        if (!baselineMinPairs.empty()) pad_to_shape_domain(baselineMinPairs);
+        if (!baselineMidPairs.empty()) pad_to_shape_domain(baselineMidPairs);
 
 
         build_curve_on_shape_from_linear_pairs(out.epsC, c_eps);
         build_curve_on_shape_from_linear_pairs(out.epsM, m_eps);
         build_curve_on_shape_from_linear_pairs(out.epsY, y_eps);
 
-        if (!bmin.empty() && !bmid.empty()) {
-            build_curve_on_shape_from_linear_pairs(out.baseMin, bmin);
-            build_curve_on_shape_from_linear_pairs(out.baseMid, bmid);
+        if (!baselineMinPairs.empty() && !baselineMidPairs.empty()) {
+            if (baselineScale != 1.0f) {
+                for (auto& sample : baselineMinPairs) {
+                    if (std::isfinite(sample.second)) {
+                        sample.second *= baselineScale;
+                    }
+                }
+            }
+            build_curve_on_shape_from_linear_pairs(out.baseMin, baselineMinPairs);
+            build_curve_on_shape_from_linear_pairs(out.baseMid, baselineMidPairs);
             out.hasBaseline = true;
         }
         else {
@@ -616,7 +661,7 @@ namespace Print {
             Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
         }
 
-        // 6) Apply Y/M/C dichroic filters at current amounts (AgX parity: transmittance = curve^amount)
+        // 6) Apply Y/M/C dichroic filters using Durst wheel linear blending (agx parity)
         Ee_filtered.resize(Spectral::gShape.K);
         auto blend_filter = [](float curveVal, float amount)->float {
             const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
@@ -624,9 +669,9 @@ namespace Print {
             return std::pow(c, a);
             };
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_filter(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
-            const float fM = blend_filter(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
-            const float fC = blend_filter(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
+            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
+            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
+            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
             const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
@@ -870,16 +915,11 @@ namespace Print {
         }
 
         // 4) Apply neutral Y/M/C dichroic filters to enlarger light
-        Ee_filtered.resize(Spectral::gShape.K);
-        auto blend_filter = [](float curveVal, float amount)->float {
-            const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
-            const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
-            return std::pow(c, a);
-            };
+        Ee_filtered.resize(Spectral::gShape.K);        
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_filter(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
-            const float fM = blend_filter(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
-            const float fC = blend_filter(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
+            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
+            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
+            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
             const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
@@ -1025,19 +1065,11 @@ namespace Print {
         // Apply spectral Y/M/C dichroic filters to enlarger light before per-channel reduction
         thread_local std::vector<float> Ee_filtered;
         Ee_filtered.resize(Spectral::gShape.K);
-
         // Blend each wheel between identity (1.0) and its full transmittance curve
-        auto blend_filter = [](float curveVal, float amount)->float {
-            // AgX parity: optical density scaling → transmittance = curve^amount
-            const float a = std::isfinite(amount) ? std::clamp(amount, 0.0f, 8.0f) : 0.0f;
-            const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 1e-6f, 1.0f) : 1.0f;
-            return std::pow(c, a);
-            };
-
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_filter(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
-            const float fM = blend_filter(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
-            const float fC = blend_filter(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
+            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], prm.yFilter);
+            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], prm.mFilter);
+            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], prm.cFilter);
             const float fTotal = std::max(0.0f, std::min(1.0f, fY * fM * fC));
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }

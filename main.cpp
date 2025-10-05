@@ -1527,7 +1527,11 @@ void JuicerEffect::bootstrap_after_attach() {
 
     // Load selected print paper profile
     const std::string printDir = print_dir_for_index(P.printPaperIndex);
-    Print::load_profile_from_dir(printDir, _state->printRT.profile);
+    const char* paperKey = print_json_key_for_paper_index(P.printPaperIndex);
+    const std::string printProfileJson = paperKey
+        ? gDataDir + std::string("profiles\\") + paperKey + std::string(".json")
+        : std::string();
+    Print::load_profile_from_dir(printDir, _state->printRT.profile, printProfileJson);
 
     // Illuminants from current params
     Print::build_illuminant_from_choice(P.enlIll, _state->printRT, _state->dataDir, /*forEnlarger*/true);
@@ -1549,12 +1553,12 @@ void JuicerEffect::bootstrap_after_attach() {
         int enlChoice = 2;
         _pEnlIll->getValue(enlChoice);
         if (enlChoice == 2) {
-            const char* paperKey = print_json_key_for_paper_index(P.printPaperIndex);
+            const char* paperKeyLocal = paperKey ? paperKey : print_json_key_for_paper_index(P.printPaperIndex);
             const char* negKey = negative_json_key_for_stock_index(P.filmStockIndex);
             const std::string jsonPath = gDataDir + std::string("Print\\enlarger_neutral_ymc_filters.json");
 
             std::tuple<float, float, float> ymc{};
-            if (load_enlarger_neutral_filters(jsonPath, paperKey, "TH-KG3-L", negKey, ymc)) {
+            if (load_enlarger_neutral_filters(jsonPath, paperKeyLocal, "TH-KG3-L", negKey, ymc)) {
                 float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
                 if (_pEnlargerY) _pEnlargerY->setValue(y);
                 if (_pEnlargerM) _pEnlargerM->setValue(m);
@@ -1617,7 +1621,11 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
     // Reload print profile if print paper changed
     if (changedNameOrNull && std::strcmp(changedNameOrNull, kParamPrintPaper) == 0) {
         const std::string printDir = print_dir_for_index(P.printPaperIndex);
-        Print::load_profile_from_dir(printDir, _state->printRT.profile);
+        const char* paperKey = print_json_key_for_paper_index(P.printPaperIndex);
+        const std::string printProfileJson = paperKey
+            ? gDataDir + std::string("profiles\\") + paperKey + std::string(".json")
+            : std::string();
+        Print::load_profile_from_dir(printDir, _state->printRT.profile, printProfileJson);
 
         // Reload dichroic filters (keep vendor default; can be parameterized later)
         try {
@@ -1632,12 +1640,12 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
         int enlChoice = 2;
         if (_pEnlIll) _pEnlIll->getValue(enlChoice);
         if (enlChoice == 2) {
-            const char* paperKey = print_json_key_for_paper_index(P.printPaperIndex);
+            const char* paperKeyLocal = paperKey ? paperKey : print_json_key_for_paper_index(P.printPaperIndex);
             const char* negKey = negative_json_key_for_stock_index(P.filmStockIndex);
             const std::string jsonPath = gDataDir + std::string("Print\\enlarger_neutral_ymc_filters.json");
 
             std::tuple<float, float, float> ymc{};
-            if (load_enlarger_neutral_filters(jsonPath, paperKey, "TH-KG3-L", negKey, ymc)) {
+            if (load_enlarger_neutral_filters(jsonPath, paperKeyLocal, "TH-KG3-L", negKey, ymc)) {
                 float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
 
                 _state->suppressParamEvents = true; // prevent recursion

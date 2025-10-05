@@ -12,6 +12,7 @@ namespace Profiles {
         std::vector<std::pair<float, float>> dyeY;
         std::vector<std::pair<float, float>> baseMin;
         std::vector<std::pair<float, float>> baseMid;
+        float dyeDensityMinFactor = 1.0f;
 
         std::string densitometer;
         std::vector<float> densityMidNeutral;

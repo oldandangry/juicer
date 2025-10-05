@@ -96,6 +96,15 @@ namespace Profiles {
         }
         const Json& data = root["data"];
 
+        if (data.contains("tune")) {
+            const Json& tune = data["tune"];
+            if (tune.contains("dye_density_min_factor")) {
+                if (auto val = parse_optional_float(tune["dye_density_min_factor"])) {
+                    outProfile.dyeDensityMinFactor = *val;
+                }
+            }
+        }
+
         if (!data.contains("wavelengths") || !data.contains("dye_density")) {
             return false;
         }
