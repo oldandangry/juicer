@@ -1169,13 +1169,13 @@ public:
         // Parameter reads
         double exposureSliderEV = 0.0;
         if (_pExposure) _pExposure->getValue(exposureSliderEV);
-
-        // Defer composing exposureScale until after the auto-exposure block.
+               
         float exposureSliderScale = 1.0f;
         if (std::isfinite(exposureSliderEV)) {
             exposureSliderScale = static_cast<float>(std::pow(2.0, exposureSliderEV));
         }
-
+        // Defer composing exposureScale until after the auto-exposure block.
+        float exposureScale = 1.0f;
 
         // Prepare branch params
         Scanner::Params scannerParams;
@@ -1272,7 +1272,8 @@ public:
                 autoEV = evComp;
             }
             // Compose total camera EV (agx parity): autoEV + slider EV
-            const double totalEV = autoEV + exposureSliderEV;
+            double sliderEV = std::isfinite(exposureSliderEV) ? exposureSliderEV : 0.0;
+            const double totalEV = autoEV + sliderEV;
             exposureScale = static_cast<float>(std::pow(2.0, totalEV));
         }
 
