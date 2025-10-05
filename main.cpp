@@ -831,19 +831,7 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
     }
     else {
         target->spdReady = false;
-    }
-
-    // Calibrate print profile per-channel logE offsets to viewing axis (agx parity)
-    if (Print::profile_is_valid(S.printRT.profile)) {
-        // Use print paper sensitivity under viewing Ybar to place mids correctly.
-        Print::calibrate_print_logE_offsets_from_profile(target->tablesView, S.printRT.profile);
-        std::ostringstream oss;
-        oss << "calibrated print logE offsets Y/M/C="
-            << S.printRT.profile.logEOffY << "/"
-            << S.printRT.profile.logEOffM << "/"
-            << S.printRT.profile.logEOffC;
-        JTRACE("BUILD", oss.str());
-    }
+    }    
 
     if (target->tablesView.K <= 0) {
         JTRACE("BUILD", "tablesView not ready; will cause wsReady=0 in render.");
@@ -1105,6 +1093,7 @@ public:
 
             _pPrintBypass = fetchBooleanParam("PrintBypass");
             _pPrintExposure = fetchDoubleParam("PrintExposure");
+            _pPrintPreflash = fetchDoubleParam("PrintPreflash");
             _pPrintExposureComp = fetchBooleanParam("PrintExposureCompensation");
             _pEnlargerY = fetchDoubleParam("EnlargerY");
             _pEnlargerM = fetchDoubleParam("EnlargerM");
@@ -1194,14 +1183,16 @@ public:
         Print::Params printParams;
         {
             bool bypass = true;
-            double pexp = 1.0, y = 1.0, m = 1.0, c = 1.0;
+            double pexp = 1.0, preflash = 0.0, y = 1.0, m = 1.0, c = 1.0;
             if (_pPrintBypass)   _pPrintBypass->getValue(bypass);
             if (_pPrintExposure) _pPrintExposure->getValue(pexp);
+            if (_pPrintPreflash) _pPrintPreflash->getValue(preflash);
             if (_pEnlargerY)     _pEnlargerY->getValue(y);
             if (_pEnlargerM)     _pEnlargerM->getValue(m);
             if (_pEnlargerC)     _pEnlargerC->getValue(c);
             printParams.bypass = bypass;
             printParams.exposure = static_cast<float>(pexp);
+            printParams.preflashExposure = static_cast<float>(preflash);
             printParams.yFilter = static_cast<float>(y);
             printParams.mFilter = static_cast<float>(m);
             printParams.cFilter = static_cast<float>(c);
@@ -1416,6 +1407,7 @@ private:
 
     OFX::BooleanParam* _pPrintBypass = nullptr;
     OFX::DoubleParam* _pPrintExposure = nullptr;
+    OFX::DoubleParam* _pPrintPreflash = nullptr;
     OFX::BooleanParam* _pPrintExposureComp = nullptr;
     OFX::DoubleParam* _pEnlargerY = nullptr;
     OFX::DoubleParam* _pEnlargerM = nullptr;
@@ -1973,6 +1965,13 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
             p->setLabel("Print exposure");
             p->setDefault(1.0);
             p->setDisplayRange(0.1, 10.0);
+            if (grpPrint) p->setParent(*grpPrint);
+        }
+        {
+            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam("PrintPreflash");
+            p->setLabel("Print preflash");
+            p->setDefault(0.0);
+            p->setDisplayRange(0.0, 1.0);
             if (grpPrint) p->setParent(*grpPrint);
         }
         {

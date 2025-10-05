@@ -432,6 +432,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 else {
                     // Spatial DIR path must continue from D_cmy to preserve blurred corrections.
                     thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
+                    thread_local std::vector<float> Tpreflash, Ee_preflash;
 
                     // 1) Negative transmittance from corrected densities
                     Print::negative_T_from_dyes(*_ws, D_cmy, Tneg);
@@ -486,6 +487,14 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     // 5) Apply print exposure ONCE (agx: raw *= exposure) + midgray compensation (vector)
                     const float rawScale = _printParams.exposure * kMid_spectral;
                     raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
+
+                    if (std::isfinite(_printParams.preflashExposure) && _printParams.preflashExposure > 0.0f) {
+                        float rawPre[3];
+                        Print::compute_preflash_raw(*_prt, *_ws, Tpreflash, Ee_preflash, rawPre);
+                        raw[0] += rawPre[0] * _printParams.preflashExposure;
+                        raw[1] += rawPre[1] * _printParams.preflashExposure;
+                        raw[2] += rawPre[2] * _printParams.preflashExposure;
+                    }
 
                     // 6) Map to print densities via calibrated per-channel logE offsets and DC curves
                     float D_print[3];

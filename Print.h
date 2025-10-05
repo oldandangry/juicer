@@ -26,15 +26,15 @@ namespace Print {
     inline float blend_dichroic_filter_linear(float curveVal, float amount) {
         const float c = std::isfinite(curveVal) ? std::clamp(curveVal, 0.0f, 1.0f) : 1.0f;
         float steps = std::isfinite(amount) ? amount : 0.0f;
-        if (steps < 0.0f) {
-            steps = 0.0f;
-        }
+        
         if (steps <= 8.0f && steps >= -8.0f) {
             steps *= kEnlargerSteps;
         }
-        const float normalized = std::clamp(steps / kEnlargerSteps, 0.0f, 4.0f);
+        const float limitSteps = 4.0f * kEnlargerSteps;
+        steps = std::clamp(steps, -limitSteps, limitSteps);
+        const float normalized = steps / kEnlargerSteps;
         const float blended = 1.0f - (1.0f - c) * normalized;
-        return std::clamp(blended, 0.0f, 1.0f);
+        return std::max(0.0f, blended);
     }
 
     inline float compose_dichroic_amount(float neutralAmount, float deltaAmount) {
@@ -48,9 +48,10 @@ namespace Print {
             return std::clamp(steps, -limit, limit);
             };
 
-        const float neutralSteps = std::clamp(amount_to_steps(std::max(0.0f, neutralAmount)), 0.0f, 4.0f * kEnlargerSteps);
+        const float neutralSteps = amount_to_steps(neutralAmount);
         const float deltaSteps = amount_to_steps(deltaAmount);
-        const float totalSteps = std::clamp(neutralSteps + deltaSteps, 0.0f, 4.0f * kEnlargerSteps);
+        const float limit = 4.0f * kEnlargerSteps;
+        const float totalSteps = std::clamp(neutralSteps + deltaSteps, -limit, limit);
         return totalSteps / kEnlargerSteps;
     }
 
@@ -70,6 +71,7 @@ namespace Print {
     struct Params {
         bool bypass = false;     // if true, bypass print (show negative)
         float exposure = 1.0f;   // enlarger exposure scalar
+        float preflashExposure = 0.0f; // additional uniform print exposure (linear scale)
         float yFilter = 0.0f;    // delta from neutral baseline (Durst wheel steps scaled by 170)
         float mFilter = 0.0f;
         float cFilter = 0.0f;    // optional
@@ -391,27 +393,10 @@ namespace Print {
             out.hasBaseline = false;
         }
 
-        // Calibrate print logE offsets to place mids (simple midpoint heuristic)
-        auto find_mid = [](const Spectral::Curve& c)->float {
-            if (c.lambda_nm.empty()) return 0.0f;
-            float dmin = c.linear.front();
-            float dmax = c.linear.back();
-            float target = dmin + 0.5f * (dmax - dmin);
-            // find x such that c(x)=target
-            const size_t n = c.lambda_nm.size();
-            for (size_t i = 1; i < n; ++i) {
-                float x0 = c.lambda_nm[i - 1], x1 = c.lambda_nm[i];
-                float y0 = c.linear[i - 1], y1 = c.linear[i];
-                if ((y0 <= target && target <= y1) || (y1 <= target && target <= y0)) {
-                    float t = (y1 != y0) ? (target - y0) / (y1 - y0) : 0.0f;
-                    return x0 + t * (x1 - x0);
-                }
-            }
-            return c.lambda_nm.front();
-            };
-        out.logEOffC = find_mid(out.dcC);
-        out.logEOffM = find_mid(out.dcM);
-        out.logEOffY = find_mid(out.dcY);
+        // Preserve log-exposure offsets authored in the profile (agx parity).
+        out.logEOffC = 0.0f;
+        out.logEOffM = 0.0f;
+        out.logEOffY = 0.0f;
     }
 
     // Build an illuminant pinned to shape from choice. Choices align with your UI (0:D65,1:D50,2:TH-KG3-L,3:Equal)
@@ -613,6 +598,44 @@ namespace Print {
         raw[2] = std::max(0.0f, static_cast<float>(rC * dl)); // C
     }
 
+    inline void compute_preflash_raw(
+        const Runtime& rt,
+        const WorkingState& ws,
+        std::vector<float>& Tpre,
+        std::vector<float>& Ee_pre,
+        float rawOut[3])
+    {
+        rawOut[0] = rawOut[1] = rawOut[2] = 0.0f;
+        const int K = Spectral::gShape.K;
+        if (K <= 0) return;
+        if (ws.tablesView.K <= 0) return;
+
+        const float Dbase[3] = { 0.0f, 0.0f, 0.0f };
+        negative_T_from_dyes(ws, Dbase, Tpre);
+        if ((int)Tpre.size() < K) {
+            Tpre.resize((size_t)K, 1.0f);
+        }
+
+        Ee_pre.resize((size_t)K);
+        const float yAmount = compose_dichroic_amount(rt.neutralY, 0.0f);
+        const float mAmount = compose_dichroic_amount(rt.neutralM, 0.0f);
+        const float cAmount = compose_dichroic_amount(rt.neutralC, 0.0f);
+
+        for (int i = 0; i < K; ++i) {
+            const float Ee = (rt.illumEnlarger.linear.size() > size_t(i))
+                ? rt.illumEnlarger.linear[i]
+                : 1.0f;
+            const float t = Tpre[i];
+            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
+            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
+            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], cAmount);
+            const float fTotal = fY * fM * fC;
+            Ee_pre[i] = std::max(0.0f, Ee * t * fTotal);
+        }
+
+        raw_exposures_from_filtered_light(rt.profile, Ee_pre, rawOut, ws.tablesView.deltaLambda);
+    }
+
     // Midgray compensation factor computed spectrally (AgX parity): always normalize RAW so a neutral mid-gray is
     // mapped to unity exposure. When the print exposure compensation toggle is enabled the camera exposure EV scale
     // is injected, otherwise the EV term is ignored. This uses the same negative development, enlarger illuminant
@@ -734,69 +757,7 @@ namespace Print {
         D_print[1] = std::max(0.0f, D_print[1]);
         D_print[2] = std::max(0.0f, D_print[2]);
 
-    }
-
-    // Sensitivity-balanced calibration of per-channel print logE offsets using viewing axis tables.
-// Sets p.logEOffY/M/C = mid_logE_channel - log10(channel_sensitivity), where channel_sensitivity
-// is the illuminant-weighted integral of the print dye extinction under the viewing CMFs.
-    inline void calibrate_print_logE_offsets_from_tables(const SpectralTables& T, Profile& p) {
-        const int K = T.K;
-        if (K <= 0) return;
-
-        // Require print dye extinction curves to be pinned to current shape.
-        const bool epsOK =
-            (int)p.epsY.linear.size() == K &&
-            (int)p.epsM.linear.size() == K &&
-            (int)p.epsC.linear.size() == K;
-
-        // Require viewing axis components.
-        const bool axisOK =
-            (int)T.Ybar.size() == K &&
-            (int)T.Xbar.size() == K &&
-            (int)T.Zbar.size() == K;
-
-        if (!epsOK || !axisOK) return;
-
-        // Effective per-channel sensitivity under viewing axis (weight by Ybar; scale with Δλ).
-        auto chan_gain = [&](const Spectral::Curve& eps)->double {
-            double g = 0.0;
-            for (int i = 0; i < K; ++i)
-                g += static_cast<double>(eps.linear[i]) * static_cast<double>(T.Ybar[i]);
-            g *= static_cast<double>(T.deltaLambda);
-            return g;
-            };
-
-        const double sY = std::max(1e-12, chan_gain(p.epsY));
-        const double sM = std::max(1e-12, chan_gain(p.epsM));
-        const double sC = std::max(1e-12, chan_gain(p.epsC));
-
-        // Mid-logE positions per channel (unchanged sampling domain, robust to monotone curves).
-        auto find_mid = [](const Spectral::Curve& c)->float {
-            if (c.lambda_nm.empty()) return 0.0f;
-            float dmin = c.linear.front();
-            float dmax = c.linear.back();
-            float target = dmin + 0.5f * (dmax - dmin);
-            const size_t n = c.lambda_nm.size();
-            for (size_t i = 1; i < n; ++i) {
-                float x0 = c.lambda_nm[i - 1], x1 = c.lambda_nm[i];
-                float y0 = c.linear[i - 1], y1 = c.linear[i];
-                if ((y0 <= target && target <= y1) || (y1 <= target && target <= y0)) {
-                    float t = (y1 != y0) ? (target - y0) / (y1 - y0) : 0.0f;
-                    return x0 + t * (x1 - x0);
-                }
-            }
-            return c.lambda_nm.front();
-            };
-
-        const float leMidY = find_mid(p.dcY);
-        const float leMidM = find_mid(p.dcM);
-        const float leMidC = find_mid(p.dcC);
-
-        // Sensitivity-balanced offsets
-        p.logEOffY = leMidY - static_cast<float>(std::log10(sY));
-        p.logEOffM = leMidM - static_cast<float>(std::log10(sM));
-        p.logEOffC = leMidC - static_cast<float>(std::log10(sC));
-    }
+    }    
 
     // Calibrate per-channel print logE offsets using print paper sensitivity under viewing axis.
 // Sets p.logEOffY/M/C = mid_logE_channel - log10(channel_sensitivity), where channel_sensitivity
@@ -920,6 +881,7 @@ namespace Print {
 
         // 2) Negative transmittance with per-stock baseline        
         thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
+        thread_local std::vector<float> Tpreflash, Ee_preflash;
         negative_T_from_dyes(ws, D_neg, Tneg);
 
         // 3) Enlarger exposure (neutral illuminant here; print exposure happens later on RAW)
@@ -954,6 +916,14 @@ namespace Print {
         const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
         const float rawScale = expPrint * kMid;
         raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
+
+        if (std::isfinite(prm.preflashExposure) && prm.preflashExposure > 0.0f) {
+            float rawPre[3];
+            compute_preflash_raw(rt, ws, Tpreflash, Ee_preflash, rawPre);
+            raw[0] += rawPre[0] * prm.preflashExposure;
+            raw[1] += rawPre[1] * prm.preflashExposure;
+            raw[2] += rawPre[2] * prm.preflashExposure;
+        }
 
         // 6) RAW → print densities via DC curves and per-channel logE offsets
         float D_print[3] = { 0,0,0 };
@@ -1065,6 +1035,7 @@ namespace Print {
 
         // 2) Negative transmittance with optional baseline blend        
         thread_local std::vector<float> Tneg, Ee_expose, Tprint, Ee_viewed;
+        thread_local std::vector<float> Tpreflash, Ee_preflash;
         negative_T_from_dyes(ws, D_neg, Tneg);
 
         // 3) Ee_expose = Ee_enlarger * T_neg * exposure
@@ -1105,6 +1076,14 @@ namespace Print {
         const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
         const float rawScale = expPrint * kMid;
         raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
+
+        if (std::isfinite(prm.preflashExposure) && prm.preflashExposure > 0.0f) {
+            float rawPre[3];
+            compute_preflash_raw(rt, ws, Tpreflash, Ee_preflash, rawPre);
+            raw[0] += rawPre[0] * prm.preflashExposure;
+            raw[1] += rawPre[1] * prm.preflashExposure;
+            raw[2] += rawPre[2] * prm.preflashExposure;
+        }
 
 
         // Map raw to print densities via per-channel logE offsets and DC curves
