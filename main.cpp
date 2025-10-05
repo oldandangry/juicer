@@ -37,13 +37,13 @@
 #include <fstream>
 #include <cmath>
 #include <cfloat>
+#include <array>
 #include "Couplers.h"
 #include "SpectralTables.h"
 #include "SpectralMath.h"
 #include <iostream>
 #include "Illuminants.h"
 #include <sstream> // for diagnostics
-#include <array>
 #include <algorithm>
 #include "Scanner.h"
 #include "Print.h"
@@ -133,6 +133,8 @@ struct BaseState {
     bool hasBaseline = false;
     std::string densitometerType;
     std::vector<float> densityMidNeutral;
+    Profiles::DirCouplersProfile dirCouplers;
+    Profiles::MaskingCouplersProfile maskingCouplers;
 };
 
 
@@ -416,6 +418,8 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
     dmid = std::move(profile.baseMid);
     S.base.densitometerType = sanitize_densitometer_type(profile.densitometer);
     S.base.densityMidNeutral = std::move(profile.densityMidNeutral);
+    S.base.dirCouplers = profile.dirCouplers;
+    S.base.maskingCouplers = profile.maskingCouplers;
     JTRACE("STOCK", std::string("loaded agx profile json: ") + jsonKey);
 
     {
@@ -516,6 +520,88 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
             if (!std::isfinite(v)) v = 0.0f;
             if (v < 0.0f) v = 0.0f; // enforce non-negativity
         }
+
+     };
+
+    auto estimate_base_dyes = [](const Spectral::Curve& baseCurve,
+        const Spectral::Curve& epsY,
+        const Spectral::Curve& epsM,
+        const Spectral::Curve& epsC) -> std::array<float, 3>
+        {
+            std::array<float, 3> result{ 0.0f, 0.0f, 0.0f };
+            const size_t K = baseCurve.linear.size();
+            if (K == 0 || epsY.linear.size() != K || epsM.linear.size() != K || epsC.linear.size() != K) {
+                return result;
+            }
+
+            double ATA[3][3] = { {0.0,0.0,0.0}, {0.0,0.0,0.0}, {0.0,0.0,0.0} };
+            double ATb[3] = { 0.0, 0.0, 0.0 };
+
+            for (size_t i = 0; i < K; ++i) {
+                const double ay = epsY.linear[i];
+                const double am = epsM.linear[i];
+                const double ac = epsC.linear[i];
+                const double b = baseCurve.linear[i];
+                if (!std::isfinite(ay) || !std::isfinite(am) || !std::isfinite(ac) || !std::isfinite(b)) {
+                    continue;
+                }
+                const double vec[3] = { ay, am, ac };
+                for (int r = 0; r < 3; ++r) {
+                    ATb[r] += vec[r] * b;
+                    for (int c = 0; c < 3; ++c) {
+                        ATA[r][c] += vec[r] * vec[c];
+                    }
+                }
+            }
+
+            double mat[3][4];
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    mat[r][c] = ATA[r][c];
+                }
+                mat[r][3] = ATb[r];
+            }
+
+            for (int i = 0; i < 3; ++i) {
+                int pivot = i;
+                double maxAbs = std::fabs(mat[i][i]);
+                for (int r = i + 1; r < 3; ++r) {
+                    const double absVal = std::fabs(mat[r][i]);
+                    if (absVal > maxAbs) {
+                        maxAbs = absVal;
+                        pivot = r;
+                    }
+                }
+                if (maxAbs < 1e-9) {
+                    return result;
+                }
+                if (pivot != i) {
+                    for (int c = i; c < 4; ++c) {
+                        std::swap(mat[i][c], mat[pivot][c]);
+                    }
+                }
+                const double inv = 1.0 / mat[i][i];
+                for (int c = i; c < 4; ++c) {
+                    mat[i][c] *= inv;
+                }
+                for (int r = 0; r < 3; ++r) {
+                    if (r == i) continue;
+                    const double factor = mat[r][i];
+                    for (int c = i; c < 4; ++c) {
+                        mat[r][c] -= factor * mat[i][c];
+                    }
+                }
+            }
+
+            for (int i = 0; i < 3; ++i) {
+                float v = static_cast<float>(mat[i][3]);
+                if (!std::isfinite(v) || v < 0.0f) {
+                    v = 0.0f;
+                }
+                result[i] = v;
+            }
+
+            return result;
         };
 
     JTRACE_SCOPE("BUILD", "rebuild_working_state");
@@ -791,7 +877,154 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
 
 
     // 4) Recompute per-channel logE offsets (SPD exposure path) for midscale neutral using per-instance tables
+    Spectral::NegativeCouplerParams negParams;
+    negParams.DmaxY = dirRT.dMax[0];
+    negParams.DmaxM = dirRT.dMax[1];
+    negParams.DmaxC = dirRT.dMax[2];
+    negParams.baseY = 0.0f;
+    negParams.baseM = 0.0f;
+    negParams.baseC = 0.0f;
+    negParams.kB = 6.0f;
+    negParams.kG = 6.0f;
+    negParams.kR = 6.0f;
+    {
+        const float defaultMask[9] = {
+            0.98f, -0.06f, -0.02f,
+           -0.03f,  0.98f, -0.05f,
+           -0.02f, -0.04f,  0.98f };
+        std::copy(std::begin(defaultMask), std::end(defaultMask), negParams.mask);
+    }
+
+    if (S.base.hasBaseline) {
+        const auto baseCoeffs = estimate_base_dyes(baseMin, epsY, epsM, epsC);
+        negParams.baseY = baseCoeffs[0];
+        negParams.baseM = baseCoeffs[1];
+        negParams.baseC = baseCoeffs[2];
+    }
+
+    const Profiles::DirCouplersProfile& dirCfg = S.base.dirCouplers;
+    if (dirCfg.hasData) {
+        auto computeK = [&](int idx) -> float {
+            float amount = std::isfinite(dirCfg.amount) ? dirCfg.amount : 1.0f;
+            if (amount <= 0.0f) amount = 0.1f;
+            float ratio = dirCfg.ratioRGB[idx];
+            if (!std::isfinite(ratio) || ratio <= 0.0f) ratio = 1.0f;
+            float k = 6.0f * amount * ratio;
+            if (!std::isfinite(k) || k <= 0.0f) k = 6.0f;
+            return std::clamp(k, 1.0f, 24.0f);
+            };
+        negParams.kB = computeK(0);
+        negParams.kG = computeK(1);
+        negParams.kR = computeK(2);
+    }
+
+    const bool hasMaskingData = S.base.maskingCouplers.hasData;
+    if (dirCfg.hasData || hasMaskingData) {
+        float amountRGB[3] = { 1.0f, 1.0f, 1.0f };
+        if (dirCfg.hasData) {
+            for (int i = 0; i < 3; ++i) {
+                float ratio = dirCfg.ratioRGB[i];
+                if (!std::isfinite(ratio)) ratio = 1.0f;
+                if (ratio < 0.0f) ratio = 0.0f;
+                float amount = std::isfinite(dirCfg.amount) ? dirCfg.amount : 1.0f;
+                if (amount < 0.0f) amount = 0.0f;
+                amountRGB[i] = std::clamp(amount * ratio, 0.0f, 1.0f);
+            }
+        }
+
+        float dirMatrix[3][3] = { {0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f} };
+#ifdef JUICER_ENABLE_COUPLERS
+        Couplers::build_dir_matrix(dirMatrix, amountRGB, dirCfg.hasData ? dirCfg.diffusionInterlayer : 0.0f);
+#else
+        auto build_dir_matrix_local = [](float M[3][3], const float amountValues[3], float layerSigma) {
+            const float sigma = std::isfinite(layerSigma) ? std::max(0.0f, layerSigma) : 0.0f;
+            float amt[3] = { amountValues[0], amountValues[1], amountValues[2] };
+            const float sigmaCapped = std::min(sigma, 3.0f);
+            for (int i = 0; i < 3; ++i) {
+                if (!std::isfinite(amt[i])) amt[i] = 0.0f;
+                amt[i] = std::clamp(amt[i], 0.0f, 1.0f);
+            }
+            auto gauss = [sigmaCapped](int dx) -> float {
+                if (sigmaCapped <= 0.0f) {
+                    return (dx == 0) ? 1.0f : 0.0f;
+                }
+                const float s2 = sigmaCapped * sigmaCapped;
+                return std::exp(-0.5f * (dx * dx) / s2);
+                };
+            for (int r = 0; r < 3; ++r) {
+                float row[3];
+                float wsum = 0.0f;
+                for (int c = 0; c < 3; ++c) {
+                    row[c] = gauss(c - r);
+                    wsum += row[c];
+                }
+                if (wsum > 0.0f) {
+                    for (int c = 0; c < 3; ++c) {
+                        row[c] /= wsum;
+                    }
+                }
+                for (int c = 0; c < 3; ++c) {
+                    M[r][c] = amt[r] * row[c];
+                }
+            }
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    if (!std::isfinite(M[r][c])) {
+                        M[r][c] = 0.0f;
+                    }
+                }
+            }
+            };
+        build_dir_matrix_local(dirMatrix, amountRGB, dirCfg.hasData ? dirCfg.diffusionInterlayer : 0.0f);
+#endif
+
+        std::array<float, 3> gaussianSum{ 0.0f, 0.0f, 0.0f };
+        if (hasMaskingData) {
+            for (int ch = 0; ch < 3; ++ch) {
+                const auto& channel = S.base.maskingCouplers.gaussianModel[ch];
+                for (const auto& tri : channel) {
+                    float amp = tri[2];
+                    if (!std::isfinite(amp)) amp = 0.0f;
+                    gaussianSum[ch] += std::fabs(amp);
+                }
+            }
+        }
+
+        const float maskScaleBase = 0.25f;
+        const float maskScaleOffset = hasMaskingData ? 0.05f : 0.0f;
+        for (int r = 0; r < 3; ++r) {
+            float sum = hasMaskingData ? gaussianSum[r] : 0.0f;
+            if (!std::isfinite(sum)) sum = 0.0f;
+            float amountRow = dirCfg.hasData ? amountRGB[r] : 1.0f;
+            if (!std::isfinite(amountRow) || amountRow < 0.0f) amountRow = 0.0f;
+            float scale = maskScaleBase * (sum + maskScaleOffset);
+            if (dirCfg.hasData) {
+                scale *= amountRow;
+            }
+            scale = std::clamp(scale, 0.0f, 0.25f);
+            for (int c = 0; c < 3; ++c) {
+                float val = dirMatrix[r][c];
+                if (!std::isfinite(val)) {
+                    val = (r == c) ? 1.0f : 0.0f;
+                }
+                const float delta = scale * val;
+                if (r == c) {
+                    float diag = 1.0f - delta;
+                    if (!std::isfinite(diag)) diag = 1.0f;
+                    if (diag < 0.0f) diag = 0.0f;
+                    negParams.mask[r * 3 + c] = diag;
+                }
+                else {
+                    float off = -delta;
+                    if (!std::isfinite(off)) off = 0.0f;
+                    off = std::clamp(off, -1.0f, 1.0f);
+                    negParams.mask[r * 3 + c] = off;
+                }
+            }
+        }
+    }
     WorkingState* target = S.inactive();
+    target->negParams = negParams;
 
 
     // Build per-instance spectral tables for current viewing illuminant
@@ -971,6 +1204,7 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
                 target->dirRT.dMax[0] = prev->dirRT.dMax[0];
                 target->dirRT.dMax[1] = prev->dirRT.dMax[1];
                 target->dirRT.dMax[2] = prev->dirRT.dMax[2];
+                target->negParams = prev->negParams;
             }
         }
     }
@@ -997,6 +1231,8 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
             target->dirRT.dMax[i] = v; // keep rt copy coherent
         }
     }
+
+    Spectral::gNegParams = target->negParams;
 
     // Publish DIR runtime snapshot for global spectral helpers (negative preview path).
     {

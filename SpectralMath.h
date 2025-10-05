@@ -2070,9 +2070,15 @@ namespace Spectral {
     // -------------------------------------------------------------------------
     // Masking coupler matrix 
     // -------------------------------------------------------------------------
-    inline void applyMaskingCoupler(const float E[3], float D[3]) {
-        // Deprecated: linear-only coupler replaced by non-linear H-D + masking model
+    inline void applyMaskingCoupler(const float E[3], float D[3]) {        
         exposures_to_dyes(E, D);
+        const float* M = gNegParams.mask;
+        const float y = M[0] * D[0] + M[1] * D[1] + M[2] * D[2] + gNegParams.baseY;
+        const float m = M[3] * D[0] + M[4] * D[1] + M[5] * D[2] + gNegParams.baseM;
+        const float c = M[6] * D[0] + M[7] * D[1] + M[8] * D[2] + gNegParams.baseC;
+        D[0] = std::max(0.0f, y);
+        D[1] = std::max(0.0f, m);
+        D[2] = std::max(0.0f, c);
     }
 
 

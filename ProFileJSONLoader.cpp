@@ -60,6 +60,104 @@ namespace Profiles {
             }
         }
 
+        void parse_dir_couplers(const Json& node, DirCouplersProfile& outProfile) {
+            outProfile = DirCouplersProfile{};
+            if (!node.is_object()) {
+                return;
+            }
+
+            outProfile.hasData = true;
+
+            if (node.contains("active") && node["active"].is_boolean()) {
+                outProfile.active = node["active"].get<bool>();
+            }
+            if (auto amount = parse_optional_float(node.value("amount", Json{}))) {
+                outProfile.amount = *amount;
+            }
+            if (node.contains("ratio_rgb") && node["ratio_rgb"].is_array()) {
+                const Json& arr = node["ratio_rgb"];
+                for (size_t i = 0; i < std::min<size_t>(3, arr.size()); ++i) {
+                    if (auto val = parse_optional_float(arr[i])) {
+                        outProfile.ratioRGB[i] = *val;
+                    }
+                }
+            }
+            if (auto diff = parse_optional_float(node.value("diffusion_interlayer", Json{}))) {
+                outProfile.diffusionInterlayer = *diff;
+            }
+            if (auto diffSize = parse_optional_float(node.value("diffusion_size_um", Json{}))) {
+                outProfile.diffusionSizeUm = *diffSize;
+            }
+            if (auto high = parse_optional_float(node.value("high_exposure_shift", Json{}))) {
+                outProfile.highExposureShift = *high;
+            }
+        }
+
+        void parse_masking_couplers(const Json& node, MaskingCouplersProfile& outProfile) {
+            outProfile = MaskingCouplersProfile{};
+            if (!node.is_object()) {
+                return;
+            }
+
+            bool any = false;
+
+            if (node.contains("cross_over_points") && node["cross_over_points"].is_array()) {
+                const Json& arr = node["cross_over_points"];
+                outProfile.crossOverPoints.clear();
+                for (const auto& v : arr) {
+                    if (auto val = parse_optional_float(v)) {
+                        outProfile.crossOverPoints.push_back(*val);
+                        any = true;
+                    }
+                }
+            }
+
+            if (node.contains("transition_widths") && node["transition_widths"].is_array()) {
+                const Json& arr = node["transition_widths"];
+                outProfile.transitionWidths.clear();
+                for (const auto& v : arr) {
+                    if (auto val = parse_optional_float(v)) {
+                        outProfile.transitionWidths.push_back(*val);
+                        any = true;
+                    }
+                }
+            }
+
+            if (node.contains("gaussian_model") && node["gaussian_model"].is_array()) {
+                const Json& gm = node["gaussian_model"];
+                for (size_t ch = 0; ch < std::min<size_t>(3, gm.size()); ++ch) {
+                    const Json& channel = gm[ch];
+                    auto& dest = outProfile.gaussianModel[ch];
+                    dest.clear();
+                    if (!channel.is_array()) {
+                        continue;
+                    }
+                    for (const auto& peak : channel) {
+                        if (!peak.is_array() || peak.size() < 3) {
+                            continue;
+                        }
+                        std::array<float, 3> triplet{ 0.0f, 0.0f, 0.0f };
+                        bool ok = true;
+                        for (size_t k = 0; k < 3; ++k) {
+                            if (auto val = parse_optional_float(peak[k])) {
+                                triplet[k] = *val;
+                            }
+                            else {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if (ok) {
+                            dest.push_back(triplet);
+                            any = true;
+                        }
+                    }
+                }
+            }
+
+            outProfile.hasData = any;
+        }
+
     } // namespace
 
     bool load_agx_film_profile_json(const std::string& jsonPath, AgxFilmProfile& outProfile) {
@@ -201,7 +299,19 @@ namespace Profiles {
             !outProfile.densityCurveG.empty() && !outProfile.densityCurveR.empty();
         const bool haveSens = !outProfile.logSensR.empty() &&
             !outProfile.logSensG.empty() && !outProfile.logSensB.empty();
-        return haveDyes && haveCurves && haveSens;
+        if (!(haveDyes && haveCurves && haveSens)) {
+            return false;
+        }
+
+        if (root.contains("dir_couplers")) {
+            parse_dir_couplers(root["dir_couplers"], outProfile.dirCouplers);
+        }
+
+        if (root.contains("masking_couplers")) {
+            parse_masking_couplers(root["masking_couplers"], outProfile.maskingCouplers);
+        }
+
+        return true;
     }
 
 } // namespace Profiles

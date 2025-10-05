@@ -1,10 +1,28 @@
 #pragma once
 
+#include <array>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace Profiles {
+
+    struct DirCouplersProfile {
+        bool hasData = false;
+        bool active = false;
+        float amount = 1.0f;
+        std::array<float, 3> ratioRGB{ {1.0f, 1.0f, 1.0f} };
+        float diffusionInterlayer = 0.0f;
+        float diffusionSizeUm = 0.0f;
+        float highExposureShift = 0.0f;
+    };
+
+    struct MaskingCouplersProfile {
+        bool hasData = false;
+        std::vector<float> crossOverPoints;
+        std::vector<float> transitionWidths;
+        std::array<std::vector<std::array<float, 3>>, 3> gaussianModel{};
+    };
 
     struct AgxFilmProfile {
         std::vector<std::pair<float, float>> dyeC;
@@ -24,6 +42,9 @@ namespace Profiles {
         std::vector<std::pair<float, float>> densityCurveB;
         std::vector<std::pair<float, float>> densityCurveG;
         std::vector<std::pair<float, float>> densityCurveR;
+
+        DirCouplersProfile dirCouplers;
+        MaskingCouplersProfile maskingCouplers;
     };
 
     bool load_agx_film_profile_json(const std::string& jsonPath, AgxFilmProfile& outProfile);

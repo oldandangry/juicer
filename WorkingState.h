@@ -57,7 +57,9 @@ struct WorkingState {
     bool  spdReady = false;
 
     // Snapshot of print runtime used for this WorkingState build (immutable during render)
-    std::unique_ptr<Print::Runtime> printRT;     
+    std::unique_ptr<Print::Runtime> printRT;
+
+    Spectral::NegativeCouplerParams negParams{};
 
     // Versioning for atomic swap / debugging
     std::uint64_t buildCounter = 0;
