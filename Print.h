@@ -828,8 +828,28 @@ namespace Print {
         float raw[3];
         raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw);
 
-        // 8) Factor is inverse of midgray green RAW; guard for tiny values
-        const float g = std::max(1e-12f, raw[1]);
+        // 8) Align the green RAW probe with the print paper colour space. When both the
+        // film (view) and print spectral tables are available, project the filtered
+        // light onto each set of XYZ axes and use the ratio of their Y components to
+        // remap the RAW probe into the print normalisation. This mirrors agx-emulsion's
+        // behaviour where the mid-grey measurement happens in the paper space.
+        float g = std::max(1e-12f, raw[1]);
+        if (ws.tablesPrint.K > 0 && ws.tablesView.K > 0) {
+            float XYZ_view[3] = { 0.0f, 0.0f, 0.0f };
+            float XYZ_print[3] = { 0.0f, 0.0f, 0.0f };
+
+            Spectral::Ee_to_XYZ_given_tables(ws.tablesView, Ee_filtered, XYZ_view);
+            Spectral::Ee_to_XYZ_given_tables(ws.tablesPrint, Ee_filtered, XYZ_print);
+
+            const float Y_view = XYZ_view[1];
+            const float Y_print = XYZ_print[1];
+            if (std::isfinite(Y_view) && std::isfinite(Y_print) && Y_view > 0.0f && Y_print > 0.0f) {
+                const float correction = Y_print / Y_view;
+                g = std::max(1e-12f, g * correction);
+            }
+        }
+
+        // 9) Factor is inverse of the print-normalised midgrey green RAW.
         return 1.0f / g;
     }
 
