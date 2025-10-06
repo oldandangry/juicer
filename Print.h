@@ -23,6 +23,9 @@ struct WorkingState;
 namespace Print {
 
     constexpr float kEnlargerSteps = 170.0f;
+    constexpr float kDefaultNeutralY = 0.9f;
+    constexpr float kDefaultNeutralM = 0.5f;
+    constexpr float kDefaultNeutralC = 0.35f;
 
     inline float blend_dichroic_filter_linear(float curveVal, float normalizedAmount) {
         const float c = std::isfinite(curveVal) ? curveVal : 1.0f;
@@ -78,9 +81,9 @@ namespace Print {
         Spectral::Curve filterM;
         Spectral::Curve filterC;
         // Neutral baseline scalars (0..1) used for compensation probes
-        float neutralY = 1.0f;
-        float neutralM = 1.0f;
-        float neutralC = 1.0f;
+        float neutralY = kDefaultNeutralY;
+        float neutralM = kDefaultNeutralM;
+        float neutralC = kDefaultNeutralC;
     };
 
     // Profile validity: spectral-domain curves must match current spectral shape (K).

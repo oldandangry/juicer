@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cfloat>
 #include <array>
+#include <vector>
 #include "Couplers.h"
 #include "SpectralTables.h"
 #include "SpectralMath.h"
@@ -268,6 +269,7 @@ static bool load_resampled_channel(const std::string& path,
 #define kParamContrast "Contrast"   // unitless
 #define kParamSpectralMode "SpectralUpsampling"
 #define kParamViewingIllum  "ViewingIlluminant"
+#define kParamEnlargerIlluminant "EnlargerIlluminant"
 
 // Film stock parameter
 #define kParamFilmStock "FilmStock"
@@ -306,6 +308,17 @@ static inline const char* print_json_key_for_paper_index(int paperIndex) {
     case 1: return "kodak_2393_uc";
     default: return "kodak_2383_uc";
     }
+}
+
+static std::vector<std::string> enlarger_illuminant_keys_for_choice(int choice) {
+    switch (choice) {
+    case 0: return { "D65", "d65" };
+    case 1: return { "D50", "d50" };
+    case 2: return { "TH-KG3-L", "th-kg3-l" };
+    case 3: return { "EqualEnergy", "equal_energy", "Equal energy" };
+    default: break;
+    }
+    return {};
 }
 
 // Film stock folder names (must match folder names under Resources/Stock)
@@ -1662,6 +1675,8 @@ private:
 
     void onParamsPossiblyChanged(const char* changedNameOrNull);
     void bootstrap_after_attach();
+
+    void applyNeutralFilters(const ParamSnapshot& P, bool resetFilterParams, bool ensureExposureComp);
         
 };
 
@@ -1699,42 +1714,7 @@ void JuicerEffect::bootstrap_after_attach() {
         JuicerTrace::write("PRINT", "DICHROICS: exception during load; using identity filters");
     }
 
-
-    // Apply enlarger neutral filters from JSON if illuminant is TH-KG3-L (index 2)
-    if (_pEnlIll) {
-        int enlChoice = 2;
-        _pEnlIll->getValue(enlChoice);
-        if (enlChoice == 2) {
-            const char* paperKeyLocal = paperKey ? paperKey : print_json_key_for_paper_index(P.printPaperIndex);
-            const char* negKey = negative_json_key_for_stock_index(P.filmStockIndex);
-            const std::string jsonPath = gDataDir + std::string("Print\\enlarger_neutral_ymc_filters.json");
-
-            std::tuple<float, float, float> ymc{};
-            if (load_enlarger_neutral_filters(jsonPath, paperKeyLocal, "TH-KG3-L", negKey, ymc)) {
-                float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
-                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
-                JTRACE("PRINT", "Applied neutral filters (JSON) Y/M/C=" + std::to_string(y) + "/" + std::to_string(m) + "/" + std::to_string(c));
-                if (_pPrintExposureComp) _pPrintExposureComp->setValue(true);
-
-                // Persist neutral baselines in runtime
-                _state->printRT.neutralY = y;
-                _state->printRT.neutralM = m;
-                _state->printRT.neutralC = c;
-            }
-            else {
-                JTRACE("PRINT", "Neutral filters JSON not found or incomplete; leaving defaults");
-
-                // Fallback: use baked-in neutral defaults when JSON data is unavailable
-                const float yDef = 0.9f, mDef = 0.5f, cDef = 0.35f;
-                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
-                _state->printRT.neutralY = yDef;
-                _state->printRT.neutralM = mDef;
-                _state->printRT.neutralC = cDef;
-            }
-        }
-    }
+    applyNeutralFilters(P, /*resetFilterParams*/true, /*ensureExposureComp*/true);    
 
 
     // Film stock load + initial rebuild
@@ -1753,6 +1733,61 @@ void JuicerEffect::bootstrap_after_attach() {
     // Re-enable changedParam handling now that bootstrap is complete
     _state->suppressParamEvents = false;
     _state->inBootstrap = false;
+}
+
+void JuicerEffect::applyNeutralFilters(const ParamSnapshot& P, bool resetFilterParams, bool ensureExposureComp) {
+    if (!_state) {
+        return;
+    }
+
+    const char* paperKey = print_json_key_for_paper_index(P.printPaperIndex);
+    const char* negativeKey = negative_json_key_for_stock_index(P.filmStockIndex);
+    const std::vector<std::string> illumKeys = enlarger_illuminant_keys_for_choice(P.enlIll);
+
+    float neutralY = Print::kDefaultNeutralY;
+    float neutralM = Print::kDefaultNeutralM;
+    float neutralC = Print::kDefaultNeutralC;
+    bool loaded = false;
+
+    if (paperKey && negativeKey && !illumKeys.empty()) {
+        const std::string jsonPath = gDataDir + std::string("Print\\enlarger_neutral_ymc_filters.json");
+        std::tuple<float, float, float> ymc{};
+        for (const std::string& illumKey : illumKeys) {
+            if (illumKey.empty()) {
+                continue;
+            }
+            if (load_enlarger_neutral_filters(jsonPath, paperKey, illumKey, negativeKey, ymc)) {
+                neutralY = std::clamp(std::get<0>(ymc), 0.0f, 1.0f);
+                neutralM = std::clamp(std::get<1>(ymc), 0.0f, 1.0f);
+                neutralC = std::clamp(std::get<2>(ymc), 0.0f, 1.0f);
+                loaded = true;
+                JTRACE("PRINT", "Neutral filters loaded for " + std::string(illumKey)
+                    + " Y/M/C=" + std::to_string(neutralY) + "/" + std::to_string(neutralM)
+                    + "/" + std::to_string(neutralC));
+                break;
+            }
+        }
+    }
+
+    if (!loaded) {
+        JTRACE("PRINT", "Neutral filters missing for illuminant; using Durst defaults Y/M/C="
+            + std::to_string(neutralY) + "/" + std::to_string(neutralM) + "/" + std::to_string(neutralC));
+    }
+
+    _state->printRT.neutralY = neutralY;
+    _state->printRT.neutralM = neutralM;
+    _state->printRT.neutralC = neutralC;
+
+    if (resetFilterParams) {
+        _state->suppressParamEvents = true;
+        if (_pEnlargerY) _pEnlargerY->setValue(0.0);
+        if (_pEnlargerM) _pEnlargerM->setValue(0.0);
+        _state->suppressParamEvents = false;
+    }
+
+    if (ensureExposureComp && _pPrintExposureComp) {
+        _pPrintExposureComp->setValue(true);
+    }
 }
 
 void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
@@ -1789,45 +1824,7 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
             JuicerTrace::write("PRINT", "DICHROICS: reload failed; identity filters");
         }
 
-        // Re-apply neutral filters from JSON if enlarger is TH-KG3-L
-        int enlChoice = 2;
-        if (_pEnlIll) _pEnlIll->getValue(enlChoice);
-        if (enlChoice == 2) {
-            const char* paperKeyLocal = paperKey ? paperKey : print_json_key_for_paper_index(P.printPaperIndex);
-            const char* negKey = negative_json_key_for_stock_index(P.filmStockIndex);
-            const std::string jsonPath = gDataDir + std::string("Print\\enlarger_neutral_ymc_filters.json");
-
-            std::tuple<float, float, float> ymc{};
-            if (load_enlarger_neutral_filters(jsonPath, paperKeyLocal, "TH-KG3-L", negKey, ymc)) {
-                float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
-
-                _state->suppressParamEvents = true; // prevent recursion
-                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
-                _state->suppressParamEvents = false;
-
-                JTRACE("PRINT", "Re-applied neutral filters (JSON) Y/M/C="
-                    + std::to_string(y) + "/" + std::to_string(m) + "/" + std::to_string(c));
-
-                // Persist neutral baselines in runtime
-                _state->printRT.neutralY = y;
-                _state->printRT.neutralM = m;
-                _state->printRT.neutralC = c;
-            }
-            else {
-                JTRACE("PRINT", "Neutral filters JSON not found or incomplete on paper change");
-
-                // Fallback: use baked-in neutral defaults when JSON data is unavailable
-                const float yDef = 0.9f, mDef = 0.5f, cDef = 0.35f;
-                _state->suppressParamEvents = true;
-                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
-                _state->suppressParamEvents = false;
-                _state->printRT.neutralY = yDef;
-                _state->printRT.neutralM = mDef;
-                _state->printRT.neutralC = cDef;
-            }
-        }
+        applyNeutralFilters(P, /*resetFilterParams*/true, /*ensureExposureComp*/false);
 
         // Force working state snapshot to carry updated printRT profile into render
         if (_state->baseLoaded) {
@@ -1835,7 +1832,10 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
             _state->lastParams = P;
             _state->lastHash = hash_params(P);
         }
+    }
 
+    if (changedNameOrNull && std::strcmp(changedNameOrNull, kParamEnlargerIlluminant) == 0) {
+        applyNeutralFilters(P, /*resetFilterParams*/true, /*ensureExposureComp*/false);
     }
 
     // Reload BaseState if stock changed
@@ -1845,31 +1845,8 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
     }
     // If film stock changed, also re-apply neutral filters for current print paper
     if (changedNameOrNull && std::strcmp(changedNameOrNull, kParamFilmStock) == 0 && _state->baseLoaded) {
-        int enlChoice = 2;
-        if (_pEnlIll) _pEnlIll->getValue(enlChoice);
-        if (enlChoice == 2) {
-            const char* paperKey = print_json_key_for_paper_index(P.printPaperIndex);
-            const char* negKey = negative_json_key_for_stock_index(P.filmStockIndex);
-            const std::string jsonPath = gDataDir + std::string("Print\\enlarger_neutral_ymc_filters.json");
-
-            std::tuple<float, float, float> ymc{};
-            if (load_enlarger_neutral_filters(jsonPath, paperKey, "TH-KG3-L", negKey, ymc)) {
-                float y = std::get<0>(ymc), m = std::get<1>(ymc), c = std::get<2>(ymc);
-                _state->suppressParamEvents = true;
-                if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-                if (_pEnlargerM) _pEnlargerM->setValue(0.0);                
-                _state->suppressParamEvents = false;
-                JTRACE("PRINT", "Re-applied neutral filters after stock change Y/M/C=" + std::to_string(y) + "/" + std::to_string(m) + "/" + std::to_string(c));
-            }
-            else {
-                JTRACE("PRINT", "Neutral filters JSON missing on stock change; applying realistic defaults");
-                const float yDef = 0.96f, mDef = 0.69f, cDef = 0.35f;
-                _state->printRT.neutralY = yDef;
-                _state->printRT.neutralM = mDef;
-                _state->printRT.neutralC = cDef;
-                // Do not overwrite user UI values here; runtime neutral baselines are used by mid-gray computation.
-            }
-        }
+        applyNeutralFilters(P, /*resetFilterParams*/true, /*ensureExposureComp*/false);
+        
     }
     else if (P.filmStockIndex != _state->lastParams.filmStockIndex) {
         const std::string stockDir = stock_dir_for_index(P.filmStockIndex);
