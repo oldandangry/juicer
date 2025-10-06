@@ -572,6 +572,7 @@ namespace Print {
     {
         const int K = Spectral::gShape.K;
         double Ec = 0.0, Em = 0.0, Ey = 0.0;
+        const double dl = static_cast<double>(Spectral::gDeltaLambda);
 
         for (int i = 0; i < K; ++i) {
             const float e = Ee_expose[i];
@@ -584,9 +585,9 @@ namespace Print {
             Ey += static_cast<double>(e) * static_cast<double>(ly);
         }
 
-        Eprint[0] = std::max(0.0f, static_cast<float>(Ey)); // Y
-        Eprint[1] = std::max(0.0f, static_cast<float>(Em)); // M
-        Eprint[2] = std::max(0.0f, static_cast<float>(Ec)); // C
+        Eprint[0] = std::max(0.0f, static_cast<float>(Ey * dl)); // Y
+        Eprint[1] = std::max(0.0f, static_cast<float>(Em * dl)); // M
+        Eprint[2] = std::max(0.0f, static_cast<float>(Ec * dl)); // C
     }
 
     // Compute per-channel raw exposures via spectral sensitivity contraction:
@@ -614,6 +615,7 @@ namespace Print {
         double rY = 0.0;
         double rM = 0.0;
         double rC = 0.0;
+        const double dl = static_cast<double>(Spectral::gDeltaLambda);
 
         for (size_t i = 0; i < n; ++i) {
             const double e = Ee_filtered[i];
@@ -622,9 +624,9 @@ namespace Print {
             rC += e * static_cast<double>(sensC[i]);
         }
 
-        raw[0] = std::max(0.0f, static_cast<float>(rY)); // Y
-        raw[1] = std::max(0.0f, static_cast<float>(rM)); // M
-        raw[2] = std::max(0.0f, static_cast<float>(rC)); // C
+        raw[0] = std::max(0.0f, static_cast<float>(rY * dl)); // Y
+        raw[1] = std::max(0.0f, static_cast<float>(rM * dl)); // M
+        raw[2] = std::max(0.0f, static_cast<float>(rC * dl)); // C
     }
 
     inline void compute_preflash_raw(
