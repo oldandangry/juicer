@@ -444,21 +444,7 @@ namespace Print {
         auto y_pairs = load_pairs_silent(yPath);
         auto m_pairs = load_pairs_silent(mPath);
         auto c_pairs = load_pairs_silent(cPath);
-
-        auto scale_percent_pairs = [](std::vector<std::pair<float, float>>& pairs) {
-            for (auto& sample : pairs) {
-                if (std::isfinite(sample.second)) {
-                    sample.second *= 0.01f;
-                }
-                else {
-                    sample.second = 0.0f;
-                }
-            }
-            };
-
-        scale_percent_pairs(y_pairs);
-        scale_percent_pairs(m_pairs);
-        scale_percent_pairs(c_pairs);
+        
 
         // If not found, try Edmund Optics / Thorlabs fallbacks (same filenames under their dirs)
         if (y_pairs.empty() || m_pairs.empty() || c_pairs.empty()) {
