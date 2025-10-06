@@ -709,9 +709,9 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
 
             std::vector<std::vector<float>> densitometerResp(3, std::vector<float>(Spectral::gShape.K));
             for (int i = 0; i < Spectral::gShape.K; ++i) {
-                densitometerResp[0][i] = respB[i];
+                densitometerResp[0][i] = respR[i];
                 densitometerResp[1][i] = respG[i];
-                densitometerResp[2][i] = respR[i];
+                densitometerResp[2][i] = respB[i];
             }
             JTRACE("BUILD", "unmix: densitometerResp populated");
 
