@@ -51,9 +51,6 @@
     <ClCompile Include="NeutralFilters.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ProcTestWrappers.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="ProfileJSONLoader.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
