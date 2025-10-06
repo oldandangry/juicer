@@ -273,10 +273,10 @@ namespace Profiles {
         if (!logExposure.is_array() || !densityCurves.is_array()) {
             return false;
         }
-        const size_t curveCount = std::min(logExposure.size(), densityCurves.size());
-        outProfile.densityCurveB.reserve(curveCount);
-        outProfile.densityCurveG.reserve(curveCount);
+        const size_t curveCount = std::min(logExposure.size(), densityCurves.size());        
         outProfile.densityCurveR.reserve(curveCount);
+        outProfile.densityCurveG.reserve(curveCount);
+        outProfile.densityCurveB.reserve(curveCount);
         for (size_t i = 0; i < curveCount; ++i) {
             std::optional<float> logEOpt = parse_optional_float(logExposure[i]);
             if (!logEOpt) {
@@ -295,8 +295,8 @@ namespace Profiles {
         // Require the core spectral assets to be present.
         const bool haveDyes = !outProfile.dyeC.empty() &&
             !outProfile.dyeM.empty() && !outProfile.dyeY.empty();
-        const bool haveCurves = !outProfile.densityCurveB.empty() &&
-            !outProfile.densityCurveG.empty() && !outProfile.densityCurveR.empty();
+        const bool haveCurves = !outProfile.densityCurveR.empty() &&
+            !outProfile.densityCurveG.empty() && !outProfile.densityCurveB.empty();
         const bool haveSens = !outProfile.logSensR.empty() &&
             !outProfile.logSensG.empty() && !outProfile.logSensB.empty();
         if (!(haveDyes && haveCurves && haveSens)) {

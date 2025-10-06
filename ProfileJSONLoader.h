@@ -38,10 +38,10 @@ namespace Profiles {
         std::vector<std::pair<float, float>> logSensR;
         std::vector<std::pair<float, float>> logSensG;
         std::vector<std::pair<float, float>> logSensB;
-
-        std::vector<std::pair<float, float>> densityCurveB;
-        std::vector<std::pair<float, float>> densityCurveG;
+                
         std::vector<std::pair<float, float>> densityCurveR;
+        std::vector<std::pair<float, float>> densityCurveG;
+        std::vector<std::pair<float, float>> densityCurveB;
 
         DirCouplersProfile dirCouplers;
         MaskingCouplersProfile maskingCouplers;

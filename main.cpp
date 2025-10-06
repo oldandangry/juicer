@@ -381,21 +381,21 @@ static const char* film_json_key_for_folder(const std::string& folder) {
 /// Reload film stock assets into BaseState (no global mutation). Returns true on success.
 static bool load_film_stock_into_base(const std::string& stockDir, InstanceState& S) {
     JTRACE_SCOPE("STOCK", std::string("load_film_stock_into_base: ") + stockDir);
-
-    std::vector<std::pair<float, float>> y_data;
-    std::vector<std::pair<float, float>> m_data;
+        
     std::vector<std::pair<float, float>> c_data;
-
-    std::vector<std::pair<float, float>> b_sens;
-    std::vector<std::pair<float, float>> g_sens;
+    std::vector<std::pair<float, float>> m_data;
+    std::vector<std::pair<float, float>> y_data;
+        
     std::vector<std::pair<float, float>> r_sens;
+    std::vector<std::pair<float, float>> g_sens;
+    std::vector<std::pair<float, float>> b_sens;
 
     std::vector<std::pair<float, float>> dmin;
     std::vector<std::pair<float, float>> dmid;
-
-    std::vector<std::pair<float, float>> dc_b;
-    std::vector<std::pair<float, float>> dc_g;
+        
     std::vector<std::pair<float, float>> dc_r;
+    std::vector<std::pair<float, float>> dc_g;
+    std::vector<std::pair<float, float>> dc_b;
 
     S.base.densitometerType.clear();
     S.base.densityMidNeutral.clear();
@@ -420,13 +420,13 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
 
     c_data = std::move(profile.dyeC);
     m_data = std::move(profile.dyeM);
-    y_data = std::move(profile.dyeY);
-    b_sens = std::move(profile.logSensB);
-    g_sens = std::move(profile.logSensG);
+    y_data = std::move(profile.dyeY);    
     r_sens = std::move(profile.logSensR);
-    dc_b = std::move(profile.densityCurveB);
-    dc_g = std::move(profile.densityCurveG);
+    g_sens = std::move(profile.logSensG);
+    b_sens = std::move(profile.logSensB);
     dc_r = std::move(profile.densityCurveR);
+    dc_g = std::move(profile.densityCurveG);
+    dc_b = std::move(profile.densityCurveB);
     dmin = std::move(profile.baseMin);
     dmid = std::move(profile.baseMid);
     S.base.densitometerType = sanitize_densitometer_type(profile.densitometer);
@@ -438,27 +438,28 @@ static bool load_film_stock_into_base(const std::string& stockDir, InstanceState
     {
         auto sz = [](const auto& v) { return (int)v.size(); };
         std::ostringstream oss;
-        oss << "y/m/c=" << sz(y_data) << "/" << sz(m_data) << "/" << sz(c_data)
-            << " sens b/g/r=" << sz(b_sens) << "/" << sz(g_sens) << "/" << sz(r_sens)
-            << " dens b/g/r=" << sz(dc_b) << "/" << sz(dc_g) << "/" << sz(dc_r)
+        oss << "c/m/y=" << sz(c_data) << "/" << sz(m_data) << "/" << sz(y_data)
+            << " sens r/g/b=" << sz(r_sens) << "/" << sz(g_sens) << "/" << sz(b_sens)
+            << " dens r/g/b=" << sz(dc_r) << "/" << sz(dc_g) << "/" << sz(dc_b)
             << " base min/mid=" << sz(dmin) << "/" << sz(dmid);
         JTRACE("STOCK", oss.str());
     }
 
-    if (y_data.empty()) JTRACE("STOCK", "dye_density_y missing/empty");
-    if (m_data.empty()) JTRACE("STOCK", "dye_density_m missing/empty");
+    
     if (c_data.empty()) JTRACE("STOCK", "dye_density_c missing/empty");
-    if (b_sens.empty()) JTRACE("STOCK", "log_sensitivity_b missing/empty");
-    if (g_sens.empty()) JTRACE("STOCK", "log_sensitivity_g missing/empty");
+    if (m_data.empty()) JTRACE("STOCK", "dye_density_m missing/empty");
+    if (y_data.empty()) JTRACE("STOCK", "dye_density_y missing/empty");
     if (r_sens.empty()) JTRACE("STOCK", "log_sensitivity_r missing/empty");
-    if (dc_b.empty()) JTRACE("STOCK", "density_curve_b missing/empty");
-    if (dc_g.empty()) JTRACE("STOCK", "density_curve_g missing/empty");
+    if (g_sens.empty()) JTRACE("STOCK", "log_sensitivity_g missing/empty");
+    if (b_sens.empty()) JTRACE("STOCK", "log_sensitivity_b missing/empty");
     if (dc_r.empty()) JTRACE("STOCK", "density_curve_r missing/empty");
+    if (dc_g.empty()) JTRACE("STOCK", "density_curve_g missing/empty");
+    if (dc_b.empty()) JTRACE("STOCK", "density_curve_b missing/empty");
 
     const bool okCore =
-        !y_data.empty() && !m_data.empty() && !c_data.empty() &&
-        !b_sens.empty() && !g_sens.empty() && !r_sens.empty() &&
-        !dc_b.empty() && !dc_g.empty() && !dc_r.empty();
+        !c_data.empty() && !m_data.empty() && !y_data.empty() &&
+        !r_sens.empty() && !g_sens.empty() && !b_sens.empty() &&
+        !dc_r.empty() && !dc_g.empty() && !dc_b.empty();
     if (!okCore) {
         JTRACE("STOCK", "okCore=false (required assets missing)");
         return false;

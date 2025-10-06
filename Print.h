@@ -52,7 +52,7 @@ namespace Print {
         bool glareRemoved = false;
         float logEOffC = 0.0f, logEOffM = 0.0f, logEOffY = 0.0f; // legacy per-channel logE offsets (unused)
 
-        // Print paper spectral log-sensitivity (B/G/R on disk => Y/M/C mapping), pinned to shape (log10 domain in CSVs)
+        // Print paper spectral log-sensitivity (R/G/B on disk => C/M/Y mapping), pinned to shape (log10 domain in CSVs)
         Spectral::Curve sensY_log, sensM_log, sensC_log;
     };
 
@@ -169,15 +169,15 @@ namespace Print {
         auto m_eps = load_pairs_silent(dir + "dye_density_m.csv");
         auto y_eps = load_pairs_silent(dir + "dye_density_y.csv");
 
-        // Load sensitivities
-        auto b_sens = load_pairs_silent(dir + "log_sensitivity_b.csv"); // Blue -> Yellow
-        auto g_sens = load_pairs_silent(dir + "log_sensitivity_g.csv"); // Green -> Magenta
+        // Load sensitivities (R/G/B on disk → C/M/Y in memory)
         auto r_sens = load_pairs_silent(dir + "log_sensitivity_r.csv"); // Red   -> Cyan
+        auto g_sens = load_pairs_silent(dir + "log_sensitivity_g.csv"); // Green -> Magenta
+        auto b_sens = load_pairs_silent(dir + "log_sensitivity_b.csv"); // Blue  -> Yellow
 
-        if (hasJsonProfile) {
-            if (!profileJson.logSensB.empty()) b_sens = profileJson.logSensB;
-            if (!profileJson.logSensG.empty()) g_sens = profileJson.logSensG;
+        if (hasJsonProfile) {            
             if (!profileJson.logSensR.empty()) r_sens = profileJson.logSensR;
+            if (!profileJson.logSensG.empty()) g_sens = profileJson.logSensG;
+            if (!profileJson.logSensB.empty()) b_sens = profileJson.logSensB;
         }
 
         // Pad all to shape domain
@@ -240,7 +240,7 @@ namespace Print {
         // --- End diagnostic logging ---
 
         // density curves are linear D vs logE (not log10 D)
-        // agx-emulsion convention for PRINT stocks: files are B/G/R; map B→Y, G→M, R→C
+        // agx-emulsion convention for PRINT stocks: files are R/G/B; map R→C, G→M, B→Y
 
         // Declare CMY in-memory curves (double precision)
         std::vector<std::pair<double, double>> c_dc;
@@ -265,10 +265,10 @@ namespace Print {
             return out;
             };
 
-        // Canonical agx-emulsion print stock: BGR on disk
-        auto b_dc = load_pairs_silent(dir + "density_curve_b.csv"); // Blue -> Yellow
-        auto g_dc = load_pairs_silent(dir + "density_curve_g.csv"); // Green -> Magenta
+        // Canonical agx-emulsion print stock: BGR on disk        
         auto r_dc = load_pairs_silent(dir + "density_curve_r.csv"); // Red   -> Cyan
+        auto g_dc = load_pairs_silent(dir + "density_curve_g.csv"); // Green -> Magenta
+        auto b_dc = load_pairs_silent(dir + "density_curve_b.csv"); // Blue  -> Yellow
 
         if (!r_dc.empty()) c_dc = promote_pairs(r_dc); // R -> C
         if (!g_dc.empty()) m_dc = promote_pairs(g_dc); // G -> M
