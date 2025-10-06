@@ -489,7 +489,8 @@ namespace Print {
                 for (int i = 0; i < Spectral::gShape.K; ++i) {
                     const float wl = Spectral::gShape.wavelengths[i];
                     const float v = interp.evaluate(wl);
-                    dst.linear[(size_t)i] = std::isfinite(v) ? v : 1.0f;
+                    const float normalized = std::isfinite(v) ? (v * 0.01f) : 1.0f;
+                    dst.linear[(size_t)i] = normalized;
                 }
             };
 
