@@ -444,7 +444,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     Print::negative_T_from_dyes(*_ws, D_cmy, Tneg);
 
                     // Per-instance spectral shape to avoid global races and size mismatches
-                    const int K = _ws->tablesView.K;
+                    const int K = std::min(_ws->tablesView.K, _ws->tablesPrint.K);
                     if (K <= 0) {
                         // Defensive early-out: cannot proceed with spectral integration
                         dstPix[0] = rgbOut[0];
@@ -519,8 +519,8 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                         Ee_viewed[i] = std::max(0.0f, Ev * Tprint[i]);
                     }
                     float XYZ[3];
-                    Spectral::Ee_to_XYZ_given_tables(_ws->tablesView, Ee_viewed, XYZ);
-                    Spectral::XYZ_to_DWG_linear_adapted(_ws->tablesView, XYZ, rgbOut);
+                    Spectral::Ee_to_XYZ_given_tables(_ws->tablesPrint, Ee_viewed, XYZ);
+                    Spectral::XYZ_to_DWG_linear_adapted(_ws->tablesPrint, XYZ, rgbOut);
                     rgbOut[0] = std::max(0.0f, rgbOut[0]);
                     rgbOut[1] = std::max(0.0f, rgbOut[1]);
                     rgbOut[2] = std::max(0.0f, rgbOut[2]);

@@ -900,6 +900,13 @@ namespace Print {
         float rgbOut[3],
         Probe* probe /*nullable*/)
     {
+        if (ws.tablesPrint.K <= 0) {
+            rgbOut[0] = rgbOut[1] = rgbOut[2] = 0.0f;
+            if (probe) {
+                probe->XYZ[0] = probe->XYZ[1] = probe->XYZ[2] = 0.0f;
+            }
+            return;
+        }
         // 1) Sample negative densities from per-instance negative curves.
         auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
             if (c.lambda_nm.empty()) return le;
@@ -980,10 +987,12 @@ namespace Print {
         }
 
         float XYZ[3] = { 0,0,0 };
-        Spectral::Ee_to_XYZ_given_tables(ws.tablesView, Ee_viewed, XYZ);
+        if (ws.tablesPrint.K > 0) {
+            Spectral::Ee_to_XYZ_given_tables(ws.tablesPrint, Ee_viewed, XYZ);
 
-        // XYZ → DWG with chromatic adaptation
-        Spectral::XYZ_to_DWG_linear_adapted(ws.tablesView, XYZ, rgbOut);
+            // XYZ → DWG with chromatic adaptation using print paper white
+            Spectral::XYZ_to_DWG_linear_adapted(ws.tablesPrint, XYZ, rgbOut);
+        }
         rgbOut[0] = std::max(0.0f, rgbOut[0]);
         rgbOut[1] = std::max(0.0f, rgbOut[1]);
         rgbOut[2] = std::max(0.0f, rgbOut[2]);
@@ -1014,6 +1023,10 @@ namespace Print {
         float kMid_spectral,
         float rgbOut[3])
     {
+        if (ws.tablesPrint.K <= 0) {
+            return;
+        }
+
         // 1) Negative densities with DIR in logE domain (per-instance SPD vs Matrix)
         float E[3];
         const SpectralTables* tablesSPD =
@@ -1151,10 +1164,12 @@ namespace Print {
 
         // Integrate to XYZ using per-instance viewing axis and normalization
         float XYZ[3];
-        Spectral::Ee_to_XYZ_given_tables(ws.tablesView, Ee_viewed, XYZ);
-
-        // XYZ -> DWG with chromatic adaptation
-        Spectral::XYZ_to_DWG_linear_adapted(ws.tablesView, XYZ, rgbOut);
+        if (ws.tablesPrint.K > 0) {
+            Spectral::Ee_to_XYZ_given_tables(ws.tablesPrint, Ee_viewed, XYZ);
+                    
+        // XYZ -> DWG with chromatic adaptation using print paper tables
+            Spectral::XYZ_to_DWG_linear_adapted(ws.tablesPrint, XYZ, rgbOut);
+        }
         rgbOut[0] = std::max(0.0f, rgbOut[0]);
         rgbOut[1] = std::max(0.0f, rgbOut[1]);
         rgbOut[2] = std::max(0.0f, rgbOut[2]);

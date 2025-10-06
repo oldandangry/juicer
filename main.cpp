@@ -1065,6 +1065,26 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         target->tablesRef = SpectralTables{};
     }
 
+    // Build per-instance spectral tables for the print paper viewing path (agx parity)
+    if (Print::profile_is_valid(S.printRT.profile) &&
+        S.printRT.illumView.linear.size() == static_cast<size_t>(Spectral::gShape.K))
+    {
+        Spectral::build_tables_from_curves_non_global(
+            /*epsY*/ S.printRT.profile.epsY,
+            /*epsM*/ S.printRT.profile.epsM,
+            /*epsC*/ S.printRT.profile.epsC,
+            /*xbar*/ Spectral::gXBar, /*ybar*/ Spectral::gYBar, /*zbar*/ Spectral::gZBar,
+            /*illumView*/ S.printRT.illumView,
+            /*baseMin*/ S.printRT.profile.baseMin,
+            /*baseMid*/ S.printRT.profile.baseMid,
+            /*hasBaseline*/ S.printRT.profile.hasBaseline,
+            target->tablesPrint);
+    }
+    else {
+        target->tablesPrint = SpectralTables{};
+    }
+
+
     // Build scanner tables using film-negative viewing illuminant (AgX parity uses D50)
     Spectral::Curve illumScan = Spectral::build_curve_D50_pinned(S.dataDir + "Illuminants\\D50.csv");
     Spectral::build_tables_from_curves_non_global(
@@ -1572,6 +1592,7 @@ public:
             Print::profile_is_valid(prt->profile) &&
             prt->illumView.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&
             prt->illumEnlarger.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&
+            (ws && ws->tablesPrint.K == Spectral::gShape.K) &&
             wsReady;
         if (!printReady) {
             if (prt && !Print::profile_is_valid(prt->profile)) {
