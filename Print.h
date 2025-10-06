@@ -380,6 +380,33 @@ namespace Print {
         dedup_strict_curve(out.dcM);
         dedup_strict_curve(out.dcC);
 
+        auto subtract_curve_min = [](Spectral::Curve& c) {
+            if (c.linear.empty()) {
+                return;
+            }
+            float minVal = std::numeric_limits<float>::infinity();
+            for (float v : c.linear) {
+                if (std::isfinite(v)) {
+                    minVal = std::min(minVal, v);
+                }
+            }
+            if (!std::isfinite(minVal)) {
+                return;
+            }
+            for (float& v : c.linear) {
+                if (!std::isfinite(v)) {
+                    v = 0.0f;
+                }
+                else {
+                    v = std::max(0.0f, v - minVal);
+                }
+            }
+            };
+
+        subtract_curve_min(out.dcY);
+        subtract_curve_min(out.dcM);
+        subtract_curve_min(out.dcC);
+
         std::vector<std::pair<float, float>> bmin, bmid;
         try {
             bmin = Spectral::load_csv_pairs(dir + "dye_density_min.csv");
