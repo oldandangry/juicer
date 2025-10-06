@@ -552,7 +552,8 @@ namespace Print {
     }
 
 
-    // MVP: derive print channel exposures E_print[3] from Ee_expose(λ) using print dye extinctions as proxies
+    // MVP: derive print channel exposures E_print[3] from Ee_expose(λ) using print dye extinctions as proxies.
+    // Channels are stored in C/M/Y order to match agx-emulsion's contract.
     inline void exposures_for_print_channels(const Runtime& rt,
         const std::vector<float>& Ee_expose,
         float Eprint[3])
@@ -571,12 +572,12 @@ namespace Print {
             Ey += static_cast<double>(e) * static_cast<double>(ly);
         }
 
-        Eprint[0] = std::max(0.0f, static_cast<float>(Ey)); // Y
+        Eprint[0] = std::max(0.0f, static_cast<float>(Ec)); // C
         Eprint[1] = std::max(0.0f, static_cast<float>(Em)); // M
-        Eprint[2] = std::max(0.0f, static_cast<float>(Ec)); // C
+        Eprint[2] = std::max(0.0f, static_cast<float>(Ey)); // Y
     }
 
-    // Compute per-channel raw exposures via spectral sensitivity contraction:
+    // Compute per-channel raw exposures via spectral sensitivity contraction (C/M/Y order).
     inline void raw_exposures_from_filtered_light(
         const Profile& p,
         const std::vector<float>& Ee_filtered,
@@ -598,20 +599,20 @@ namespace Print {
         const size_t sizeC = sensC.size();
         const size_t n = std::min({ static_cast<size_t>(K), Ee_filtered.size(), sizeY, sizeM, sizeC });
 
-        double rY = 0.0;
-        double rM = 0.0;
-        double rC = 0.0;        
+        double accumC = 0.0;
+        double accumM = 0.0;
+        double accumY = 0.0;
 
         for (size_t i = 0; i < n; ++i) {
             const double e = Ee_filtered[i];
-            rY += e * static_cast<double>(sensY[i]);
-            rM += e * static_cast<double>(sensM[i]);
-            rC += e * static_cast<double>(sensC[i]);
+            accumY += e * static_cast<double>(sensY[i]);
+            accumM += e * static_cast<double>(sensM[i]);
+            accumC += e * static_cast<double>(sensC[i]);
         }
 
-        raw[0] = std::max(0.0f, static_cast<float>(rY)); // Y
-        raw[1] = std::max(0.0f, static_cast<float>(rM)); // M
-        raw[2] = std::max(0.0f, static_cast<float>(rC)); // C
+        raw[0] = std::max(0.0f, static_cast<float>(accumC)); // C
+        raw[1] = std::max(0.0f, static_cast<float>(accumM)); // M
+        raw[2] = std::max(0.0f, static_cast<float>(accumY)); // Y
     }
 
     inline void compute_preflash_raw(
@@ -745,12 +746,12 @@ namespace Print {
         return Spectral::sample_density_at_logE(dc, logE);
     }
 
-    // Build print densities from print exposures (parity with agx-emulsion)
+    // Build print densities from print exposures (C/M/Y order, parity with agx-emulsion)
     inline void print_densities_from_Eprint(const Profile& p, const float Eprint[3], float D_print[3]) {
         auto safe_log10 = [](float v)->float { return std::log10(std::max(0.0f, v) + 1e-10f); };
-        float lEy = safe_log10(Eprint[0]);
+        float lEc = safe_log10(Eprint[0]);
         float lEm = safe_log10(Eprint[1]);
-        float lEc = safe_log10(Eprint[2]);
+        float lEy = safe_log10(Eprint[2]);
 
         // Clamp to density curve logE domain to prevent sampling off-curve (parity with agx guardrails)
         auto clamp_to_dc = [](float le, const Spectral::Curve& dc)->float {
@@ -760,13 +761,14 @@ namespace Print {
             if (!std::isfinite(le)) return xmin;
             return std::min(std::max(le, xmin), xmax);
             };
-        lEy = clamp_to_dc(lEy, p.dcY);
-        lEm = clamp_to_dc(lEm, p.dcM);
+        
         lEc = clamp_to_dc(lEc, p.dcC);
+        lEm = clamp_to_dc(lEm, p.dcM);
+        lEy = clamp_to_dc(lEy, p.dcY);
 
-        D_print[0] = sample_dc(p.dcY, lEy);
+        D_print[0] = sample_dc(p.dcC, lEc);
         D_print[1] = sample_dc(p.dcM, lEm);
-        D_print[2] = sample_dc(p.dcC, lEc);
+        D_print[2] = sample_dc(p.dcY, lEy);
 
         // Densities are optical densities (OD); clamp to non-negative to prevent T>1.
         D_print[0] = std::max(0.0f, D_print[0]);
@@ -783,9 +785,9 @@ namespace Print {
             const float baseSpectral = p.hasBaseline
                 ? p.baseMin.linear[i]
                 : 0.0f;
-            const float Dlambda = D_print[0] * p.epsY.linear[i]
+            const float Dlambda = D_print[0] * p.epsC.linear[i]
                 + D_print[1] * p.epsM.linear[i]
-                + D_print[2] * p.epsC.linear[i]
+                + D_print[2] * p.epsY.linear[i]
                 + baseSpectral;
             Tprint_out[i] = std::exp(-Spectral::kLn10 * Dlambda);
         }
@@ -795,8 +797,8 @@ namespace Print {
 
     struct Probe {
         std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
-        float raw[3]{ 0,0,0 };
-        float D_print[3]{ 0,0,0 };
+        float raw[3]{ 0,0,0 };       // C/M/Y order
+        float D_print[3]{ 0,0,0 };   // C/M/Y order
         float XYZ[3]{ 0,0,0 };
     };
 
