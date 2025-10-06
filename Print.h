@@ -491,7 +491,7 @@ namespace Print {
                 for (const auto& p : pairs) {
                     if (!std::isfinite(p.first) || !std::isfinite(p.second)) continue;
                     x.push_back(p.first);
-                    y.push_back(p.second * (1.0f / 100.0f));
+                    y.push_back(p.second);
                 }
                 if (x.size() < 2) {
                     return;
