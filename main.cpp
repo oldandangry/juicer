@@ -757,6 +757,9 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
 
 
     // 2) Balance under Reference Illuminant (non-global)
+    Spectral::Curve sensB_beforeBalance = sensB;
+    Spectral::Curve sensG_beforeBalance = sensG;
+    Spectral::Curve sensR_beforeBalance = sensR;
     {
         Print::Runtime tmpRT;
         Print::build_illuminant_from_choice(P.refIll, tmpRT, S.dataDir, /*forEnlarger*/false);
@@ -1174,6 +1177,9 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
     target->sensB = std::move(sensB);
     target->sensG = std::move(sensG);
     target->sensR = std::move(sensR);
+    target->negSensB = std::move(sensB_beforeBalance);
+    target->negSensG = std::move(sensG_beforeBalance);
+    target->negSensR = std::move(sensR_beforeBalance);
     target->baseMin = std::move(baseMin);
     target->baseMid = std::move(baseMid);
     target->hasBaseline = hasBaseline;

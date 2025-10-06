@@ -24,6 +24,11 @@ struct WorkingState {
     Spectral::Curve sensG;
     Spectral::Curve sensR;
 
+    // Negative sensitivity curves before neutral balancing (AgX parity use)
+    Spectral::Curve negSensB;
+    Spectral::Curve negSensG;
+    Spectral::Curve negSensR;
+
     // Baseline curves and flag
     Spectral::Curve baseMin;
     Spectral::Curve baseMid;

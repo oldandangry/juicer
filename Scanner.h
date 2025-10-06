@@ -59,12 +59,18 @@ namespace Scanner {
         float E[3];
         const SpectralTables* tablesSPD =
             (ws.spdReady && ws.tablesRef.K > 0) ? &ws.tablesRef : nullptr;
+        const Spectral::Curve& sensB_forExposure =
+            ws.negSensB.linear.empty() ? ws.sensB : ws.negSensB;
+        const Spectral::Curve& sensG_forExposure =
+            ws.negSensG.linear.empty() ? ws.sensG : ws.negSensG;
+        const Spectral::Curve& sensR_forExposure =
+            ws.negSensR.linear.empty() ? ws.sensR : ws.negSensR;
         Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
             rgbIn, E, exposureScale,
             tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
             ws.spdReady,
-            ws.sensB, ws.sensG, ws.sensR);
+            sensB_forExposure, sensG_forExposure, sensR_forExposure);
 
         // Per-instance logE offsets (no globals)
         float logE[3] = {
@@ -179,7 +185,7 @@ namespace Scanner {
                     tablesSPD,
                     (ws.spdReady ? ws.spdSInv : nullptr),
                     ws.spdReady,
-                    ws.sensB, ws.sensG, ws.sensR);
+                    sensB_forExposure, sensG_forExposure, sensR_forExposure);
 
                 float logERef[3] = {
                     std::log10(std::max(Eref[0], 1e-6f)) + ws.logEOffB,

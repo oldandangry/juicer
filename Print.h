@@ -754,12 +754,18 @@ namespace Print {
         float E[3];
         const SpectralTables* tablesSPD =
             (ws.spdReady && ws.tablesRef.K > 0) ? &ws.tablesRef : nullptr;
+        const Spectral::Curve& sensB_forExposure =
+            ws.negSensB.linear.empty() ? ws.sensB : ws.negSensB;
+        const Spectral::Curve& sensG_forExposure =
+            ws.negSensG.linear.empty() ? ws.sensG : ws.negSensG;
+        const Spectral::Curve& sensR_forExposure =
+            ws.negSensR.linear.empty() ? ws.sensR : ws.negSensR;
         Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
             rgbMid, E, 1.0f,
             tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
             ws.spdReady,
-            ws.sensB, ws.sensG, ws.sensR);
+            sensB_forExposure, sensG_forExposure, sensR_forExposure);
         const float exposureScale = prm.exposureCompensationEnabled ? exposureCompScale : 1.0f;
         E[0] *= exposureScale; E[1] *= exposureScale; E[2] *= exposureScale;
 
@@ -1012,12 +1018,18 @@ namespace Print {
         float E[3];
         const SpectralTables* tablesSPD =
             (ws.spdReady && ws.tablesRef.K > 0) ? &ws.tablesRef : nullptr;
+        const Spectral::Curve& sensB_forExposure =
+            ws.negSensB.linear.empty() ? ws.sensB : ws.negSensB;
+        const Spectral::Curve& sensG_forExposure =
+            ws.negSensG.linear.empty() ? ws.sensG : ws.negSensG;
+        const Spectral::Curve& sensR_forExposure =
+            ws.negSensR.linear.empty() ? ws.sensR : ws.negSensR;
         Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
             rgbIn, E, 1.0f,
             tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
             ws.spdReady,
-            ws.sensB, ws.sensG, ws.sensR);
+            sensB_forExposure, sensG_forExposure, sensR_forExposure);
 
         // Apply camera exposure explicitly on negative leg to ensure parity and avoid hidden double-handling.
         {
