@@ -31,6 +31,8 @@ namespace Profiles {
         std::vector<std::pair<float, float>> baseMin;
         std::vector<std::pair<float, float>> baseMid;
         float dyeDensityMinFactor = 1.0f;
+        std::array<float, 3> gammaFactor{ {1.0f, 1.0f, 1.0f} };
+        bool hasGammaFactor = false;
 
         std::string densitometer;
         std::vector<float> densityMidNeutral;

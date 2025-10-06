@@ -1,6 +1,7 @@
 #include "ProfileJSONLoader.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <fstream>
@@ -199,6 +200,34 @@ namespace Profiles {
             if (tune.contains("dye_density_min_factor")) {
                 if (auto val = parse_optional_float(tune["dye_density_min_factor"])) {
                     outProfile.dyeDensityMinFactor = *val;
+                }
+            }
+            if (tune.contains("gamma_factor")) {
+                const Json& gf = tune["gamma_factor"];
+                std::array<float, 3> gamma{ {1.0f, 1.0f, 1.0f} };
+                bool any = false;
+                if (auto scalar = parse_optional_float(gf)) {
+                    const float v = *scalar;
+                    if (std::isfinite(v) && v > 0.0f) {
+                        gamma.fill(v);
+                        any = true;
+                    }
+                }
+                else if (gf.is_array()) {
+                    const size_t count = std::min<size_t>(3, gf.size());
+                    for (size_t i = 0; i < count; ++i) {
+                        if (auto val = parse_optional_float(gf[i])) {
+                            const float v = *val;
+                            if (std::isfinite(v) && v > 0.0f) {
+                                gamma[i] = v;
+                                any = true;
+                            }
+                        }
+                    }
+                }
+                if (any) {
+                    outProfile.gammaFactor = gamma;
+                    outProfile.hasGammaFactor = true;
                 }
             }
         }

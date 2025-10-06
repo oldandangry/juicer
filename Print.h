@@ -2,6 +2,7 @@
 #pragma once
 #include <vector>
 #include <string>
+#include <array>
 #include <cmath>
 #include "SpectralTables.h"
 #include "SpectralMath.h"
@@ -52,6 +53,7 @@ namespace Print {
         bool hasBaseline = false;
         bool glareRemoved = false;
         float logEOffC = 0.0f, logEOffM = 0.0f, logEOffY = 0.0f; // legacy per-channel logE offsets (unused)
+        std::array<float, 3> gammaFactor{ {1.0f, 1.0f, 1.0f} };
 
         // Print paper spectral log-sensitivity (R/G/B on disk => C/M/Y mapping), pinned to shape (log10 domain in CSVs)
         Spectral::Curve sensY_log, sensM_log, sensC_log;
@@ -139,6 +141,8 @@ namespace Print {
             catch (...) { return std::vector<std::pair<float, float>>{}; }
             };
 
+        out.gammaFactor = { 1.0f, 1.0f, 1.0f };
+
         Profiles::AgxFilmProfile profileJson;
         const bool hasJsonProfile = !jsonProfilePath.empty() &&
             Profiles::load_agx_film_profile_json(jsonProfilePath, profileJson);
@@ -175,10 +179,13 @@ namespace Print {
         auto g_sens = load_pairs_silent(dir + "log_sensitivity_g.csv"); // Green -> Magenta
         auto b_sens = load_pairs_silent(dir + "log_sensitivity_b.csv"); // Blue  -> Yellow
 
-        if (hasJsonProfile) {            
+        if (hasJsonProfile) {
             if (!profileJson.logSensR.empty()) r_sens = profileJson.logSensR;
             if (!profileJson.logSensG.empty()) g_sens = profileJson.logSensG;
             if (!profileJson.logSensB.empty()) b_sens = profileJson.logSensB;
+            if (profileJson.hasGammaFactor) {
+                out.gammaFactor = profileJson.gammaFactor;
+            }
         }
 
         // Pad all to shape domain
@@ -828,8 +835,33 @@ namespace Print {
 
 
 
-    inline float sample_dc(const Spectral::Curve& dc, float logE) {
-        return Spectral::sample_density_at_logE(dc, logE);
+    inline float interpolate_density_gamma(const Spectral::Curve& dc, float logE, float gammaFactor) {
+        if (dc.lambda_nm.empty()) {
+            return 0.0f;
+        }
+
+        const float gammaSafe = (std::isfinite(gammaFactor) && gammaFactor > 0.0f)
+            ? gammaFactor
+            : 1.0f;
+
+        float le = logE;
+        const float axisMin = dc.lambda_nm.front() / gammaSafe;
+        const float axisMax = dc.lambda_nm.back() / gammaSafe;
+        if (!std::isfinite(le)) {
+            le = axisMin;
+        }
+        else if (axisMin <= axisMax) {
+            le = std::clamp(le, axisMin, axisMax);
+        }
+        else {
+            le = axisMin;
+        }
+
+        float sample = Spectral::sample_density_at_logE(dc, le * gammaSafe);
+        if (!std::isfinite(sample)) {
+            sample = 0.0f;
+        }
+        return sample;
     }
 
     // Build print densities from print exposures (C/M/Y order, parity with agx-emulsion)
@@ -839,22 +871,9 @@ namespace Print {
         float lEm = safe_log10(Eprint[1]);
         float lEy = safe_log10(Eprint[2]);
 
-        // Clamp to density curve logE domain to prevent sampling off-curve (parity with agx guardrails)
-        auto clamp_to_dc = [](float le, const Spectral::Curve& dc)->float {
-            if (dc.lambda_nm.empty()) return le;
-            const float xmin = dc.lambda_nm.front();
-            const float xmax = dc.lambda_nm.back();
-            if (!std::isfinite(le)) return xmin;
-            return std::min(std::max(le, xmin), xmax);
-            };
-        
-        lEc = clamp_to_dc(lEc, p.dcC);
-        lEm = clamp_to_dc(lEm, p.dcM);
-        lEy = clamp_to_dc(lEy, p.dcY);
-
-        D_print[0] = sample_dc(p.dcC, lEc);
-        D_print[1] = sample_dc(p.dcM, lEm);
-        D_print[2] = sample_dc(p.dcY, lEy);
+        D_print[0] = interpolate_density_gamma(p.dcC, lEc, p.gammaFactor[0]);
+        D_print[1] = interpolate_density_gamma(p.dcM, lEm, p.gammaFactor[1]);
+        D_print[2] = interpolate_density_gamma(p.dcY, lEy, p.gammaFactor[2]);
 
         // Densities are optical densities (OD); clamp to non-negative to prevent T>1.
         D_print[0] = std::max(0.0f, D_print[0]);
