@@ -173,6 +173,11 @@ namespace JuicerProc {
         const int H = srcBounds.y2 - srcBounds.y1;
         if (W <= 0 || H <= 0) return;
 
+        const float exposureCompScale = prm.exposureCompensationEnabled
+            ? prm.exposureCompensationScale
+            : 1.0f;
+        const float kMid_spectral = Print::compute_exposure_factor_midgray(*ws, *prt, prm, exposureCompScale);
+
         // Map preview pixel centers to source coordinates (nearest neighbor)
         for (int yy = 0; yy < outH; ++yy) {
             for (int xx = 0; xx < outW; ++xx) {
@@ -198,6 +203,7 @@ namespace JuicerProc {
                     rgbIn, prm,
                     *prt, dirRT, *ws,
                     /*exposureScale*/ exposureScale,
+                    kMid_spectral,
                     rgbOut);
 
                 dstPix[0] = rgbOut[0];
@@ -530,6 +536,14 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
         return;
     }
 
+    float kMid_spectral = 0.0f;
+    if (_wsReady && _ws && _printReady && _prt && !_printParams.bypass) {
+        const float exposureCompScale = _printParams.exposureCompensationEnabled
+            ? _printParams.exposureCompensationScale
+            : 1.0f;
+        kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale);
+    }
+
     // Fallback path
     for (int y = procWindow.y1; y < procWindow.y2; ++y) {
         if (_effect.abort()) break;
@@ -555,6 +569,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                             rgbIn, _printParams,
                             *_prt, _dirRT, *_ws,
                             _exposureScale,
+                            kMid_spectral,
                             rgbOut);
                     }
                 }

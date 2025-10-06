@@ -938,6 +938,7 @@ namespace Print {
         const Couplers::Runtime& dirRT,
         const WorkingState& ws,
         float exposureScale,
+        float kMid_spectral,
         float rgbOut[3])
     {
         // 1) Negative densities with DIR in logE domain (per-instance SPD vs Matrix)
@@ -1036,11 +1037,13 @@ namespace Print {
         const float expPrint = std::isfinite(prm.exposure) ? std::max(0.0f, prm.exposure) : 1.0f;        
 
         // Spectral midgray compensation (AgX parity): scale RAW vector by factor = 1 / RAW_midgray_green.
-        // Compute once per call, independent of pixel content.
+        // Prefer a caller-supplied precomputed factor (tile-constant) to avoid redundant probes.
         const float exposureCompScale = prm.exposureCompensationEnabled
             ? prm.exposureCompensationScale
             : 1.0f;
-        const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
+        const float kMid = (std::isfinite(kMid_spectral) && kMid_spectral > 0.0f)
+            ? kMid_spectral
+            : compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
         const float rawScale = expPrint * kMid;
         raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
 
