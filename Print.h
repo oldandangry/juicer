@@ -11,6 +11,7 @@
 #include "AkimaInterpolator.h"
 #include <sstream>
 #include <algorithm>
+#include <limits>
 
 
 namespace JuicerTrace {
@@ -273,6 +274,43 @@ namespace Print {
         if (!r_dc.empty()) c_dc = promote_pairs(r_dc); // R -> C
         if (!g_dc.empty()) m_dc = promote_pairs(g_dc); // G -> M
         if (!b_dc.empty()) y_dc = promote_pairs(b_dc); // B -> Y
+
+        // Align log-exposure domain with agx-emulsion by centering the curves on
+        // the green (magenta) density curve midpoint. agx computes
+        // log_exposure_shift = (max + min) / 2 using the green channel and
+        // evaluates each curve at log_exposure + shift. Subtracting the same
+        // shift from our sample domains is equivalent and keeps our sampling in
+        // parity with agx.
+        double logExposureShift = 0.0;
+        bool hasLogExposureShift = false;
+        if (!m_dc.empty()) {
+            double minX = std::numeric_limits<double>::infinity();
+            double maxX = -std::numeric_limits<double>::infinity();
+            for (const auto& sample : m_dc) {
+                const double x = sample.first;
+                if (!std::isfinite(x)) continue;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+            }
+            if (std::isfinite(minX) && std::isfinite(maxX) && minX <= maxX) {
+                logExposureShift = 0.5 * (maxX + minX);
+                hasLogExposureShift = std::isfinite(logExposureShift);
+            }
+        }
+
+        if (hasLogExposureShift) {
+            auto apply_log_exposure_shift = [logExposureShift](std::vector<std::pair<double, double>>& curve) {
+                for (auto& sample : curve) {
+                    double& x = sample.first;
+                    if (std::isfinite(x)) {
+                        x -= logExposureShift;
+                    }
+                }
+                };
+            apply_log_exposure_shift(c_dc);
+            apply_log_exposure_shift(m_dc);
+            apply_log_exposure_shift(y_dc);
+        }
 
         // Build sorted curves into profile (convert to float for sort_and_build)
         if (!c_dc.empty()) Spectral::sort_and_build(out.dcC, demote_pairs(c_dc));
