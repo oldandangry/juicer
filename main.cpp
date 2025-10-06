@@ -1608,6 +1608,10 @@ public:
             JTRACE("BUILD", std::string("changedParam suppressed for '") + paramName + "'");
             return;
         }
+        if (_state && _state->inBootstrap) {
+            JTRACE("BUILD", std::string("changedParam ignored during bootstrap for '") + paramName + "'");
+            return;
+        }
         onParamsPossiblyChanged(paramName.c_str());
     }
 
@@ -1779,14 +1783,22 @@ void JuicerEffect::applyNeutralFilters(const ParamSnapshot& P, bool resetFilterP
     _state->printRT.neutralC = neutralC;
 
     if (resetFilterParams) {
+        const bool wasSuppressed = _state->suppressParamEvents;
         _state->suppressParamEvents = true;
         if (_pEnlargerY) _pEnlargerY->setValue(0.0);
-        if (_pEnlargerM) _pEnlargerM->setValue(0.0);
-        _state->suppressParamEvents = false;
+        if (_pEnlargerM) _pEnlargerM->setValue(0.0);        
+        _state->suppressParamEvents = wasSuppressed;
     }
 
     if (ensureExposureComp && _pPrintExposureComp) {
-        _pPrintExposureComp->setValue(true);
+        bool exposureToggle = false;
+        _pPrintExposureComp->getValue(exposureToggle);
+        if (!exposureToggle) {
+            const bool wasSuppressed = _state->suppressParamEvents;
+            _state->suppressParamEvents = true;
+            _pPrintExposureComp->setValue(true);
+            _state->suppressParamEvents = wasSuppressed;
+        }
     }
 }
 
