@@ -3,14 +3,15 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
-#include <iterator>
-#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
+#include <string_view>
 
 #include "nlohmann/json.hpp"
 
@@ -19,12 +20,75 @@ namespace Profiles {
 
         using Json = nlohmann::json;
 
-        void replace_all(std::string& str, const std::string& from, const std::string& to) {
-            if (from.empty()) return;
-            size_t pos = 0;
-            while ((pos = str.find(from, pos)) != std::string::npos) {
-                str.replace(pos, from.size(), to);
-                pos += to.size();
+        bool is_identifier_char(char c) {
+            return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.';
+        }
+
+        void sanitize_non_finite_literals(std::string& text) {
+            static constexpr std::array<std::pair<std::string_view, std::string_view>, 15> kReplacements{ {
+                { "-Infinity", "null" },
+                { "+Infinity", "null" },
+                { "Infinity", "null" },
+                { "-INF", "null" },
+                { "+INF", "null" },
+                { "INF", "null" },
+                { "-inf", "null" },
+                { "+inf", "null" },
+                { "inf", "null" },
+                { "-NaN", "null" },
+                { "+NaN", "null" },
+                { "NaN", "null" },
+                { "-nan", "null" },
+                { "+nan", "null" },
+                { "nan", "null" }
+            } };
+
+            bool inString = false;
+            bool escaping = false;
+
+            for (std::size_t i = 0; i < text.size();) {
+                const char c = text[i];
+                if (inString) {
+                    if (escaping) {
+                        escaping = false;
+                        ++i;
+                        continue;
+                    }
+                    if (c == '\\') {
+                        escaping = true;
+                        ++i;
+                        continue;
+                    }
+                    if (c == '"') {
+                        inString = false;
+                    }
+                    ++i;
+                    continue;
+                }
+
+                if (c == '"') {
+                    inString = true;
+                    ++i;
+                    continue;
+                }
+
+                bool replaced = false;
+                for (const auto& [token, replacement] : kReplacements) {
+                    if (text.compare(i, token.size(), token) == 0) {
+                        const std::size_t end = i + token.size();
+                        const bool hasPrev = i > 0 && is_identifier_char(text[i - 1]);
+                        const bool hasNext = end < text.size() && is_identifier_char(text[end]);
+                        if (!hasPrev && !hasNext) {
+                            text.replace(i, token.size(), replacement);
+                            i += replacement.size();
+                            replaced = true;
+                            break;
+                        }
+                    }
+                }
+                if (!replaced) {
+                    ++i;
+                }
             }
         }
 
@@ -37,9 +101,9 @@ namespace Profiles {
             oss << file.rdbuf();
             std::string text = oss.str();
 
-            // agx-emulsion profiles encode missing spectral samples as NaN.
+            // agx-emulsion profiles encode missing spectral samples as non-finite literals.
             // Replace with JSON null so the parser can ingest the document.
-            replace_all(text, "NaN", "null");
+            sanitize_non_finite_literals(text);
 
             out = Json::parse(text, nullptr, false);
             return !out.is_discarded();
@@ -51,6 +115,19 @@ namespace Profiles {
                 if (std::isfinite(v)) {
                     return v;
                 }
+            }
+            else if (node.is_string()) {
+                const std::string& str = node.get_ref<const std::string&>();
+                const char* begin = str.c_str();
+                char* end = nullptr;
+                errno = 0;
+                const float v = std::strtof(begin, &end);
+                if (end != begin && end == begin + str.size() && errno == 0 && std::isfinite(v)) {
+                    return v;
+                }
+            }
+            else if (node.is_boolean()) {
+                return node.get<bool>() ? 1.0f : 0.0f;
             }
             return std::nullopt;
         }
@@ -67,31 +144,39 @@ namespace Profiles {
                 return;
             }
 
-            outProfile.hasData = true;
+            bool any = false;
 
             if (node.contains("active") && node["active"].is_boolean()) {
                 outProfile.active = node["active"].get<bool>();
+                any = true;
             }
             if (auto amount = parse_optional_float(node.value("amount", Json{}))) {
                 outProfile.amount = *amount;
+                any = true;
             }
             if (node.contains("ratio_rgb") && node["ratio_rgb"].is_array()) {
                 const Json& arr = node["ratio_rgb"];
                 for (size_t i = 0; i < std::min<size_t>(3, arr.size()); ++i) {
                     if (auto val = parse_optional_float(arr[i])) {
                         outProfile.ratioRGB[i] = *val;
+                        any = true;
                     }
                 }
             }
             if (auto diff = parse_optional_float(node.value("diffusion_interlayer", Json{}))) {
                 outProfile.diffusionInterlayer = *diff;
+                any = true;
             }
             if (auto diffSize = parse_optional_float(node.value("diffusion_size_um", Json{}))) {
                 outProfile.diffusionSizeUm = *diffSize;
+                any = true;
             }
             if (auto high = parse_optional_float(node.value("high_exposure_shift", Json{}))) {
                 outProfile.highExposureShift = *high;
+                any = true;
             }
+
+            outProfile.hasData = any;
         }
 
         void parse_masking_couplers(const Json& node, MaskingCouplersProfile& outProfile) {
