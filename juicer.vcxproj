@@ -168,6 +168,7 @@
     <ClCompile Include="..\OFXS\Support\Library\ofxsProperty.cpp" />
     <ClCompile Include="..\OFXS\Support\Library\ofxsPropertyValidation.cpp" />
     <ClCompile Include="AkimaInterpolator.cpp" />
+    <ClCompile Include="JuicerState.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="mainProcessing.cpp" />
     <ClCompile Include="NeutralFilters.cpp" />
@@ -182,6 +183,7 @@
     <ClInclude Include="AkimaInterpolator.h" />
     <ClInclude Include="Couplers.h" />
     <ClInclude Include="Illuminants.h" />
+    <ClInclude Include="JuicerState.h" />
     <ClInclude Include="mainProcessing.h" />
     <ClInclude Include="NeutralFilters.h" />
     <ClInclude Include="NpyLoader.h" />
