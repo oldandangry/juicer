@@ -49,7 +49,9 @@ namespace Couplers {
     // OFX parameter names
     // ------------------------------
     static constexpr const char* kParamCouplersActive = "CouplersActive";
+    static constexpr const char* kParamCouplersGroup = "Couplers";
     static constexpr const char* kParamCouplersPrecorrect = "CouplersPrecorrectCurves";
+    static constexpr const char* kParamCouplersAmount = "CouplersAmount";
     static constexpr const char* kParamCouplersAmountB = "CouplersAmountB";
     static constexpr const char* kParamCouplersAmountG = "CouplersAmountG";
     static constexpr const char* kParamCouplersAmountR = "CouplersAmountR";
@@ -437,43 +439,61 @@ namespace Couplers {
 
         OfxPropertySetHandle p;
 
+        OfxPropertySetHandle grp;
+        paramSuite->paramDefine(ps, kOfxParamTypeGroup, kParamCouplersGroup, &grp);
+        propSuite->propSetString(grp, kOfxPropLabel, 0, "DIR couplers");
+
         paramSuite->paramDefine(ps, kOfxParamTypeBoolean, kParamCouplersActive, &p);
-        propSuite->propSetString(p, kOfxPropLabel, 0, "DIR couplers");
+        propSuite->propSetString(p, kOfxPropLabel, 0, "Active");
         propSuite->propSetInt(p, kOfxParamPropDefault, 0, 1);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
         paramSuite->paramDefine(ps, kOfxParamTypeBoolean, kParamCouplersPrecorrect, &p);
         propSuite->propSetString(p, kOfxPropLabel, 0, "Precorrect density curves");
         propSuite->propSetInt(p, kOfxParamPropDefault, 0, 1);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
+
+        paramSuite->paramDefine(ps, kOfxParamTypeDouble, kParamCouplersAmount, &p);
+        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers amount");
+        propSuite->propSetDouble(p, kOfxParamPropDefault, 0, 1.0);
+        propSuite->propSetDouble(p, kOfxParamPropDisplayMin, 0, 0.0);
+        propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 2.0);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
         paramSuite->paramDefine(ps, kOfxParamTypeDouble, kParamCouplersAmountR, &p);
-        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers amount R");
+        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers ratio R");
         propSuite->propSetDouble(p, kOfxParamPropDefault, 0, 0.7);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMin, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 1.0);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
         paramSuite->paramDefine(ps, kOfxParamTypeDouble, kParamCouplersAmountG, &p);
-        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers amount G");
+        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers ratio G");
         propSuite->propSetDouble(p, kOfxParamPropDefault, 0, 0.7);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMin, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 1.0);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
         paramSuite->paramDefine(ps, kOfxParamTypeDouble, kParamCouplersAmountB, &p);
-        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers amount B");
+        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers ratio B");
         propSuite->propSetDouble(p, kOfxParamPropDefault, 0, 0.5);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMin, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 1.0);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
         paramSuite->paramDefine(ps, kOfxParamTypeDouble, kParamCouplersLayerSigma, &p);
         propSuite->propSetString(p, kOfxPropLabel, 0, "Layer diffusion");
         propSuite->propSetDouble(p, kOfxParamPropDefault, 0, 1.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMin, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 3.0);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
         paramSuite->paramDefine(ps, kOfxParamTypeDouble, kParamCouplersHighExpShift, &p);
         propSuite->propSetString(p, kOfxPropLabel, 0, "High exposure shift");
         propSuite->propSetDouble(p, kOfxParamPropDefault, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMin, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 1.0);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
         // Spatial diffusion (xy Gaussian in pixel domain), default 0 for speed/parity now
         paramSuite->paramDefine(ps, kOfxParamTypeDouble, kParamCouplersSpatialSigma, &p);
@@ -481,6 +501,7 @@ namespace Couplers {
         propSuite->propSetDouble(p, kOfxParamPropDefault, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMin, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 15.0);
+        propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
     }
 
@@ -489,6 +510,7 @@ namespace Couplers {
         if (!name) return;
         if (std::strcmp(name, kParamCouplersPrecorrect) == 0 ||
             std::strcmp(name, kParamCouplersActive) == 0 ||
+            std::strcmp(name, kParamCouplersAmount) == 0 ||
             std::strcmp(name, kParamCouplersAmountR) == 0 ||
             std::strcmp(name, kParamCouplersAmountG) == 0 ||
             std::strcmp(name, kParamCouplersAmountB) == 0 ||
@@ -529,6 +551,7 @@ namespace Couplers {
         Runtime& rt) {
         // Defaults
         rt.active = true;
+        double amountSlider = 1.0;
         double ar = 0.7, ag = 0.7, ab = 0.5, sigma = 1.0, high = 0.0;
         double spatial = 0.0;
         int activeInt = 1;
@@ -548,6 +571,7 @@ namespace Couplers {
             };
 
         getB(kParamCouplersActive, activeInt);
+        getD(kParamCouplersAmount, amountSlider);
         getD(kParamCouplersAmountR, ar);
         getD(kParamCouplersAmountG, ag);
         getD(kParamCouplersAmountB, ab);
@@ -571,7 +595,20 @@ namespace Couplers {
         rt.spatialSigmaPixels = fpos(spatial, /*cap*/ 15.0f);
 
         rt.active = (activeInt != 0);
-        const float amount[3] = { f01(ab), f01(ag), f01(ar) };
+        auto famp = [](double v)->float {
+            if (!std::isfinite(v)) return 0.0f;
+            if (v < 0.0) return 0.0f;
+            if (v > 2.0) return 2.0f;
+            return static_cast<float>(v);
+            };
+
+        const float ratio[3] = { f01(ab), f01(ag), f01(ar) };
+        const float amountScale = famp(amountSlider);
+        const float amount[3] = {
+            amountScale * ratio[0],
+            amountScale * ratio[1],
+            amountScale * ratio[2]
+        };
         const float sigmaF = fpos(sigma, /*cap*/ 10.0f);
         build_dir_matrix(rt.M, amount, sigmaF);
         rt.highShift = f01(high);

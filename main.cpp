@@ -149,7 +149,8 @@ struct ParamSnapshot {
     int enlIll = 3;    
     int couplersActive = 1;
     int couplersPrecorrect = 1;
-    double aR = 0.7, aG = 0.7, aB = 0.5;
+    double couplersAmount = 1.0;
+    double ratioR = 0.7, ratioG = 0.7, ratioB = 0.5;
     double sigma = 1.0, high = 0.0;
     int unmix = 1;
     double spatialSigma = 0.0;
@@ -166,9 +167,10 @@ static inline uint64_t hash_params(const ParamSnapshot& p) {
     h = mix(h, (uint64_t)p.enlIll);    
     h = mix(h, (uint64_t)p.couplersActive);
     h = mix(h, (uint64_t)p.couplersPrecorrect);
-    h = mix(h, (uint64_t)(p.aR * 10000.0));
-    h = mix(h, (uint64_t)(p.aG * 10000.0));
-    h = mix(h, (uint64_t)(p.aB * 10000.0));
+    h = mix(h, (uint64_t)(p.couplersAmount * 10000.0));
+    h = mix(h, (uint64_t)(p.ratioR * 10000.0));
+    h = mix(h, (uint64_t)(p.ratioG * 10000.0));
+    h = mix(h, (uint64_t)(p.ratioB * 10000.0));
     h = mix(h, (uint64_t)(p.sigma * 10000.0));
     h = mix(h, (uint64_t)(p.high * 10000.0));
     h = mix(h, (uint64_t)(p.spatialSigma * 10000.0));
@@ -808,7 +810,22 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
     Couplers::Runtime dirRT{};
     dirRT.active = (P.couplersActive != 0);
     {
-        const float amount[3] = { (float)P.aB, (float)P.aG, (float)P.aR };
+        auto clampRatio = [](double v) -> float {
+            if (!std::isfinite(v) || v < 0.0) return 0.0f;
+            if (v > 1.0) return 1.0f;
+            return static_cast<float>(v);
+            };
+        auto clampAmount = [](double v) -> float {
+            if (!std::isfinite(v) || v < 0.0) return 0.0f;
+            if (v > 2.0) return 2.0f;
+            return static_cast<float>(v);
+            };
+        const float amountScale = clampAmount(P.couplersAmount);
+        const float amount[3] = {
+            amountScale * clampRatio(P.ratioB),
+            amountScale * clampRatio(P.ratioG),
+            amountScale * clampRatio(P.ratioR)
+        };
         Couplers::build_dir_matrix(dirRT.M, amount, (float)P.sigma);
         dirRT.highShift = (float)P.high;
         dirRT.spatialSigmaPixels = static_cast<float>(P.spatialSigma);
@@ -1363,6 +1380,7 @@ public:
 #ifdef JUICER_ENABLE_COUPLERS
             _pCouplersActive = fetchBooleanParam(Couplers::kParamCouplersActive);
             _pCouplersPrecorrect = fetchBooleanParam(Couplers::kParamCouplersPrecorrect);
+            _pCouplersAmount = fetchDoubleParam(Couplers::kParamCouplersAmount);
             _pCouplersAmountR = fetchDoubleParam(Couplers::kParamCouplersAmountR);
             _pCouplersAmountG = fetchDoubleParam(Couplers::kParamCouplersAmountG);
             _pCouplersAmountB = fetchDoubleParam(Couplers::kParamCouplersAmountB);
@@ -1695,6 +1713,7 @@ private:
 #ifdef JUICER_ENABLE_COUPLERS
     OFX::BooleanParam* _pCouplersActive = nullptr;
     OFX::BooleanParam* _pCouplersPrecorrect = nullptr;
+    OFX::DoubleParam* _pCouplersAmount = nullptr;
     OFX::DoubleParam* _pCouplersAmountR = nullptr;
     OFX::DoubleParam* _pCouplersAmountG = nullptr;
     OFX::DoubleParam* _pCouplersAmountB = nullptr;
@@ -1728,9 +1747,10 @@ private:
 #ifdef JUICER_ENABLE_COUPLERS
         if (_pCouplersActive) { bool v = true; _pCouplersActive->getValue(v); P.couplersActive = v ? 1 : 0; }
         if (_pCouplersPrecorrect) { bool v = true; _pCouplersPrecorrect->getValue(v); P.couplersPrecorrect = v ? 1 : 0; }
-        if (_pCouplersAmountR)    _pCouplersAmountR->getValue(P.aR);
-        if (_pCouplersAmountG)    _pCouplersAmountG->getValue(P.aG);
-        if (_pCouplersAmountB)    _pCouplersAmountB->getValue(P.aB);
+        if (_pCouplersAmount)  _pCouplersAmount->getValue(P.couplersAmount);
+        if (_pCouplersAmountR) _pCouplersAmountR->getValue(P.ratioR);
+        if (_pCouplersAmountG) _pCouplersAmountG->getValue(P.ratioG);
+        if (_pCouplersAmountB) _pCouplersAmountB->getValue(P.ratioB);
         if (_pCouplersSigma)      _pCouplersSigma->getValue(P.sigma);
         if (_pCouplersHigh)       _pCouplersHigh->getValue(P.high);
         double spatial = 0.0;
@@ -1941,6 +1961,7 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
         const bool isCouplerParam =
             std::strcmp(changedNameOrNull, kParamCouplersActive) == 0 ||
             std::strcmp(changedNameOrNull, kParamCouplersPrecorrect) == 0 ||
+            std::strcmp(changedNameOrNull, kParamCouplersAmount) == 0 ||
             std::strcmp(changedNameOrNull, kParamCouplersAmountR) == 0 ||
             std::strcmp(changedNameOrNull, kParamCouplersAmountG) == 0 ||
             std::strcmp(changedNameOrNull, kParamCouplersAmountB) == 0 ||
@@ -2058,65 +2079,86 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
 #ifdef JUICER_ENABLE_COUPLERS
     // Couplers (DIR) parameters — wrapper descriptors matching Couplers::define_params
     {
-        OFX::BooleanParamDescriptor* p = desc.defineBooleanParam(Couplers::kParamCouplersActive);
-        p->setLabel("DIR couplers");
-        p->setDefault(true);
-        p->setEvaluateOnChange(true);
-    }
-    {
-        OFX::BooleanParamDescriptor* p = desc.defineBooleanParam(Couplers::kParamCouplersPrecorrect);
-        p->setLabel("Precorrect density curves");
-        p->setDefault(true);
-        p->setEvaluateOnChange(true);
-    }
-    {
-        OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersAmountR);
-        p->setLabel("Couplers amount R");
-        p->setDefault(0.7);
-        p->setRange(0.0, 1.0);
-        p->setDisplayRange(0.0, 1.0);
-        p->setEvaluateOnChange(true);
-    }
-    {
-        OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersAmountG);
-        p->setLabel("Couplers amount G");
-        p->setDefault(0.7);
-        p->setRange(0.0, 1.0);
-        p->setDisplayRange(0.0, 1.0);
-        p->setEvaluateOnChange(true);
-    }
-    {
-        OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersAmountB);
-        p->setLabel("Couplers amount B");
-        p->setDefault(0.5);
-        p->setRange(0.0, 1.0);
-        p->setDisplayRange(0.0, 1.0);
-        p->setEvaluateOnChange(true);
-    }
-    {
-        OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersLayerSigma);
-        p->setLabel("Layer diffusion");
-        p->setDefault(1.0);
-        p->setRange(0.0, 3.0);
-        p->setDisplayRange(0.0, 3.0);
-        p->setEvaluateOnChange(true);
-    }
-    {
-        OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersHighExpShift);
-        p->setLabel("High exposure shift");
-        p->setDefault(0.0);
-        p->setRange(0.0, 1.0);
-        p->setDisplayRange(0.0, 1.0);
-        p->setEvaluateOnChange(true);
-    }
+        OFX::GroupParamDescriptor* grpCouplers = desc.defineGroupParam(Couplers::kParamCouplersGroup);
+        if (grpCouplers) grpCouplers->setLabel("DIR couplers");
 
-    {
-        OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersSpatialSigma);
-        p->setLabel("Couplers spatial diffusion");
-        p->setDefault(0.0);
-        p->setRange(0.0, 15.0);
-        p->setDisplayRange(0.0, 15.0);
-        p->setEvaluateOnChange(true);
+        {
+            OFX::BooleanParamDescriptor* p = desc.defineBooleanParam(Couplers::kParamCouplersActive);
+            p->setLabel("Active");
+            p->setDefault(true);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::BooleanParamDescriptor* p = desc.defineBooleanParam(Couplers::kParamCouplersPrecorrect);
+            p->setLabel("Precorrect density curves");
+            p->setDefault(true);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersAmount);
+            p->setLabel("Couplers amount");
+            p->setDefault(1.0);
+            p->setRange(0.0, 2.0);
+            p->setDisplayRange(0.0, 2.0);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersAmountR);
+            p->setLabel("Couplers ratio R");
+            p->setDefault(0.7);
+            p->setRange(0.0, 1.0);
+            p->setDisplayRange(0.0, 1.0);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersAmountG);
+            p->setLabel("Couplers ratio G");
+            p->setDefault(0.7);
+            p->setRange(0.0, 1.0);
+            p->setDisplayRange(0.0, 1.0);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersAmountB);
+            p->setLabel("Couplers ratio B");
+            p->setDefault(0.5);
+            p->setRange(0.0, 1.0);
+            p->setDisplayRange(0.0, 1.0);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersLayerSigma);
+            p->setLabel("Layer diffusion");
+            p->setDefault(1.0);
+            p->setRange(0.0, 3.0);
+            p->setDisplayRange(0.0, 3.0);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersHighExpShift);
+            p->setLabel("High exposure shift");
+            p->setDefault(0.0);
+            p->setRange(0.0, 1.0);
+            p->setDisplayRange(0.0, 1.0);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersSpatialSigma);
+            p->setLabel("Couplers spatial diffusion");
+            p->setDefault(0.0);
+            p->setRange(0.0, 15.0);
+            p->setDisplayRange(0.0, 15.0);
+            if (grpCouplers) p->setParent(*grpCouplers);
+            p->setEvaluateOnChange(true);
+        }
     }
 
 #endif
