@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include "NpyLoader.h"
 #include <cstdint>
+#include <atomic>
 #include <Eigen/Dense>
 #include <Eigen/Core>
 #include "SpectralTables.h"
@@ -66,13 +67,17 @@ namespace Spectral {
     };
 
 #ifdef JUICER_ENABLE_COUPLERS
-    inline DirRuntimeSnapshot gDirRuntimeSnapshot{};
+    inline std::atomic<DirRuntimeSnapshot> gDirRuntimeSnapshot{ DirRuntimeSnapshot{} };
     inline void set_dir_runtime_snapshot(const DirRuntimeSnapshot& snap) {
-        gDirRuntimeSnapshot = snap;
+        gDirRuntimeSnapshot.store(snap, std::memory_order_release);
+    }
+    inline DirRuntimeSnapshot get_dir_runtime_snapshot() {
+        return gDirRuntimeSnapshot.load(std::memory_order_acquire);
     }
 #else
     inline DirRuntimeSnapshot gDirRuntimeSnapshot{};
     inline void set_dir_runtime_snapshot(const DirRuntimeSnapshot&) {}
+    inline DirRuntimeSnapshot get_dir_runtime_snapshot() { return gDirRuntimeSnapshot; }
 #endif
     
     inline void apply_dir_couplers(float D[3], const float E_in[3]);
@@ -1761,7 +1766,7 @@ namespace Spectral {
 
     inline void apply_dir_couplers(float D[3], const float E_in[3]) {
 #ifdef JUICER_ENABLE_COUPLERS
-        const DirRuntimeSnapshot& rt = gDirRuntimeSnapshot;
+        const DirRuntimeSnapshot rt = get_dir_runtime_snapshot();
         if (!rt.active) {
             return;
         }
