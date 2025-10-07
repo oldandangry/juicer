@@ -199,11 +199,7 @@ namespace Print {
         // Build curves
         build_curve_on_shape_from_linear_pairs(out.epsC, c_eps);
         build_curve_on_shape_from_linear_pairs(out.epsM, m_eps);
-        build_curve_on_shape_from_linear_pairs(out.epsY, y_eps);
-
-        build_curve_on_shape_from_log10_pairs(out.sensY_log, b_sens);
-        build_curve_on_shape_from_log10_pairs(out.sensM_log, g_sens);
-        build_curve_on_shape_from_log10_pairs(out.sensC_log, r_sens);
+        build_curve_on_shape_from_linear_pairs(out.epsY, y_eps);        
 
         // --- Diagnostic logging to juicer_trace.txt ---
         {           
@@ -296,43 +292,142 @@ namespace Print {
             if (!g_dc.empty()) m_dc = promote_pairs(g_dc); // G -> M
             if (!b_dc.empty()) y_dc = promote_pairs(b_dc); // B -> Y
 
-            // Align log-exposure domain with agx-emulsion by centering the curves on
-            // the green (magenta) density curve midpoint. agx computes
-            // log_exposure_shift = (max + min) / 2 using the green channel and
-            // evaluates each curve at log_exposure + shift. Subtracting the same
-            // shift from our sample domains is equivalent and keeps our sampling in
-            // parity with agx.
-            double logExposureShift = 0.0;
-            bool hasLogExposureShift = false;
-            if (!m_dc.empty()) {
-                double minX = std::numeric_limits<double>::infinity();
-                double maxX = -std::numeric_limits<double>::infinity();
-                for (const auto& sample : m_dc) {
-                    const double x = sample.first;
-                    if (!std::isfinite(x)) continue;
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                }
-                if (std::isfinite(minX) && std::isfinite(maxX) && minX <= maxX) {
-                    logExposureShift = 0.5 * (maxX + minX);
-                    hasLogExposureShift = std::isfinite(logExposureShift);
-                }
-            }
+        }
 
-            if (hasLogExposureShift) {
-                auto apply_log_exposure_shift = [logExposureShift](std::vector<std::pair<double, double>>& curve) {
-                    for (auto& sample : curve) {
-                        double& x = sample.first;
-                        if (std::isfinite(x)) {
-                            x -= logExposureShift;
-                        }
+        // Align log-exposure domains with agx-emulsion using the per-channel
+        // balance logic from agx_emulsion/profiles/balance.py. Each curve is
+        // shifted so the density that matches the green channel (magenta dye)
+        // at logE = 0 occurs at logE = 0 for that channel as well. This keeps
+        // dichroic parity while preserving the authored curve shapes.
+        auto sort_curve = [](std::vector<std::pair<double, double>>& curve) {
+            std::sort(curve.begin(), curve.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+            };
+
+        auto sample_curve_at = [](const std::vector<std::pair<double, double>>& curve, double x) -> double {
+            const size_t n = curve.size();
+            if (n == 0) return 0.0;
+            if (x <= curve.front().first) return curve.front().second;
+            if (x >= curve.back().first) return curve.back().second;
+            size_t i1 = 1;
+            while (i1 < n && curve[i1].first < x) ++i1;
+            const size_t i0 = i1 - 1;
+            const double x0 = curve[i0].first;
+            const double x1 = curve[i1].first;
+            const double y0 = curve[i0].second;
+            const double y1 = curve[i1].second;
+            const double t = (x - x0) / (x1 - x0);
+            return y0 + t * (y1 - y0);
+            };
+
+        auto find_logE_for_density = [](const std::vector<std::pair<double, double>>& curve,
+            double targetDensity, double& outLogE) -> bool {
+                if (curve.empty()) {
+                    outLogE = 0.0;
+                    return false;
+                }
+
+                double yMin = curve.front().second;
+                double yMax = yMin;
+                for (const auto& sample : curve) {
+                    if (std::isfinite(sample.second)) {
+                        yMin = std::min(yMin, sample.second);
+                        yMax = std::max(yMax, sample.second);
                     }
-                    };
-                apply_log_exposure_shift(c_dc);
-                apply_log_exposure_shift(m_dc);
-                apply_log_exposure_shift(y_dc);
+                }
+
+                if (targetDensity <= yMin) {
+                    outLogE = curve.front().first;
+                    return true;
+                }
+                if (targetDensity >= yMax) {
+                    outLogE = curve.back().first;
+                    return true;
+                }            
+
+                for (size_t i = 1; i < curve.size(); ++i) {
+                    const double y0 = curve[i - 1].second;
+                    const double y1 = curve[i].second;
+                    if (!std::isfinite(y0) || !std::isfinite(y1)) {
+                        continue;
+                    }
+                    if ((targetDensity >= y0 && targetDensity <= y1) ||
+                        (targetDensity >= y1 && targetDensity <= y0)) {
+                        const double x0 = curve[i - 1].first;
+                        const double x1 = curve[i].first;
+                        const double t = (y1 == y0) ? 0.0 : (targetDensity - y0) / (y1 - y0);
+                        outLogE = x0 + t * (x1 - x0);
+                        return true;
+                    }
+                }
+
+                outLogE = curve.back().first;
+                return false;
+            };
+
+        sort_curve(c_dc);
+        sort_curve(m_dc);
+        sort_curve(y_dc);
+
+        double leShiftC = 0.0;
+        double leShiftM = 0.0;
+        double leShiftY = 0.0;
+
+        if (!m_dc.empty()) {
+            const double greenDensityAtZero = sample_curve_at(m_dc, 0.0);
+
+            double tmpShift = 0.0;
+            if (find_logE_for_density(c_dc, greenDensityAtZero, tmpShift)) {
+                leShiftC = tmpShift;
+            }
+            if (find_logE_for_density(m_dc, greenDensityAtZero, tmpShift)) {
+                leShiftM = tmpShift;
+            }
+            if (find_logE_for_density(y_dc, greenDensityAtZero, tmpShift)) {
+                leShiftY = tmpShift;
             }
         }
+
+        auto apply_channel_shift = [](std::vector<std::pair<double, double>>& curve, double shift) {
+            if (!std::isfinite(shift) || shift == 0.0) {
+                return;
+            }
+            for (auto& sample : curve) {
+                if (std::isfinite(sample.first)) {
+                    sample.first -= shift;
+                }
+            }
+            };
+
+        apply_channel_shift(c_dc, leShiftC);
+        apply_channel_shift(m_dc, leShiftM);
+        apply_channel_shift(y_dc, leShiftY);
+
+        const double shiftTolerance = 1e-4;
+        if (std::fabs(leShiftM) > shiftTolerance) {
+            JuicerTrace::write("PRINT", "WARN: Magenta density curve shift deviates from zero; check profile balance.");
+        }
+
+        auto subtract_log_sensitivity_shift = [](std::vector<std::pair<float, float>>& sens,
+            double shift) {
+                if (!std::isfinite(shift) || sens.empty()) {
+                    return;
+                }
+                const float fShift = static_cast<float>(shift);
+                for (auto& sample : sens) {
+                    if (std::isfinite(sample.second)) {
+                        sample.second -= fShift;
+                    }
+                }
+            };
+
+        subtract_log_sensitivity_shift(r_sens, leShiftC);
+        subtract_log_sensitivity_shift(g_sens, leShiftM);
+        subtract_log_sensitivity_shift(b_sens, leShiftY);
+
+        build_curve_on_shape_from_log10_pairs(out.sensY_log, b_sens);
+        build_curve_on_shape_from_log10_pairs(out.sensM_log, g_sens);
+        build_curve_on_shape_from_log10_pairs(out.sensC_log, r_sens);
 
         // Build sorted curves into profile (convert to float for sort_and_build)
         if (!c_dc.empty()) Spectral::sort_and_build(out.dcC, demote_pairs(c_dc));
