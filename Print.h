@@ -828,11 +828,14 @@ namespace Print {
         float raw[3];
         raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw);
 
-        // 8) Align the green RAW probe with the print paper colour space. When both the
-        // film (view) and print spectral tables are available, project the filtered
-        // light onto each set of XYZ axes and use the ratio of their Y components to
-        // remap the RAW probe into the print normalisation. This mirrors agx-emulsion's
-        // behaviour where the mid-grey measurement happens in the paper space.
+        // 8) Anchor on the green RAW probe but reconcile it with the print domain.
+        //    In agx-emulsion the balance_density() step keeps green fixed at zero
+        //    log exposure while shifting the other layers so their density curves
+        //    sit on top of it. The equivalent in the print pipeline is to measure
+        //    the filtered light in both the film/view space and the print paper
+        //    space, then remap the green probe so it reflects the paper's density
+        //    response. This prevents the green anchor from "floating" when the
+        //    paper model introduces cross-talk.
         float g = std::max(1e-12f, raw[1]);
         if (ws.tablesPrint.K > 0 && ws.tablesView.K > 0) {
             float XYZ_view[3] = { 0.0f, 0.0f, 0.0f };
