@@ -560,57 +560,502 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
     sanitize_curve(densG);
     sanitize_curve(densR);
 
-    if (P.couplersPrecorrect) {
-        float amountRGB[3] = {
-            static_cast<float>(std::clamp(P.ratioB, 0.0, 1.0)),
-            static_cast<float>(std::clamp(P.ratioG, 0.0, 1.0)),
-            static_cast<float>(std::clamp(P.ratioR, 0.0, 1.0))
+    bool precorrectApplied = false;
+    Couplers::Runtime dirRT{};
+    dirRT.active = (P.couplersActive != 0);
+    {
+        auto clampRatio = [](double v) -> float {
+            if (!std::isfinite(v) || v < 0.0) return 0.0f;
+            if (v > 1.0) return 1.0f;
+            return static_cast<float>(v);
+            };
+        auto clampAmount = [](double v) -> float {
+            if (!std::isfinite(v) || v < 0.0) return 0.0f;
+            if (v > 2.0) return 2.0f;
+            return static_cast<float>(v);
+            };
+        const float amountScale = clampAmount(P.couplersAmount);
+        const float amount[3] = {
+            amountScale * clampRatio(P.ratioB),
+            amountScale * clampRatio(P.ratioG),
+            amountScale * clampRatio(P.ratioR)
         };
-        Couplers::Runtime couplersRuntime{};
-        Couplers::build_dir_matrix(couplersRuntime.M, amountRGB, static_cast<float>(P.sigma));
-        Couplers::precorrect_density_curves_before_DIR(couplersRuntime.M, static_cast<float>(P.high));
-        sanitize_curve(Spectral::gDensityCurveB);
-        sanitize_curve(Spectral::gDensityCurveG);
-        sanitize_curve(Spectral::gDensityCurveR);
+        Couplers::build_dir_matrix(dirRT.M, amount, static_cast<float>(P.sigma));
+        dirRT.highShift = static_cast<float>(P.high);
+        dirRT.spatialSigmaPixels = static_cast<float>(P.spatialSigma);
+
+        if (dirRT.active && P.couplersPrecorrect) {
+            Spectral::Curve densB_corr, densG_corr, densR_corr;
+            Couplers::precorrect_density_curves_before_DIR_into(
+                dirRT.M, dirRT.highShift,
+                densB, densG, densR,
+                densB_corr, densG_corr, densR_corr);
+            densB = std::move(densB_corr);
+            densG = std::move(densG_corr);
+            densR = std::move(densR_corr);
+            precorrectApplied = true;
+        }
+
+        sanitize_curve(densB);
+        sanitize_curve(densG);
+        sanitize_curve(densR);
         JTRACE("BUILD", "precorrect: densR/G/B sanitized");
-        Spectral::enforce_monotonic_density_curves();
+
+        auto enforce_monotone_curve = [](Spectral::Curve& c) {
+            float prev = (c.linear.empty() || !std::isfinite(c.linear[0])) ? 0.0f : c.linear[0];
+            for (size_t i = 0; i < c.linear.size(); ++i) {
+                float cur = c.linear[i];
+                if (!std::isfinite(cur) || cur < 0.0f) cur = 0.0f;
+                if (cur < prev) cur = prev;
+                c.linear[i] = cur;
+                prev = cur;
+            }
+            };
+        enforce_monotone_curve(densB);
+        enforce_monotone_curve(densG);
+        enforce_monotone_curve(densR);
+
         JTRACE("BUILD", "precorrect: monotonicity enforced on densR/G/B");
-        Spectral::deduplicate_density_curve_grid();
+        auto dedup_strict_curve = [](Spectral::Curve& c) {
+            if (c.lambda_nm.size() != c.linear.size() || c.lambda_nm.empty()) return;
+            std::vector<float> X = c.lambda_nm;
+            std::vector<float> Y = c.linear;
+            std::vector<float> X2; X2.reserve(X.size());
+            std::vector<float> Y2; Y2.reserve(Y.size());
+            float lastX = X[0];
+            float lastY = std::isfinite(Y[0]) ? std::max(0.0f, Y[0]) : 0.0f;
+            X2.push_back(lastX);
+            Y2.push_back(lastY);
+            const float eps = 1e-6f;
+            for (size_t i = 1; i < X.size(); ++i) {
+                float xi = X[i];
+                float yi = std::isfinite(Y[i]) ? std::max(0.0f, Y[i]) : 0.0f;
+                if (!std::isfinite(xi)) continue;
+                if (xi <= lastX + eps) {
+                    X2.back() = lastX;
+                    Y2.back() = std::max(Y2.back(), yi);
+                    continue;
+                }
+                X2.push_back(xi);
+                Y2.push_back(yi);
+                lastX = xi;
+            }
+            if (X2.size() >= 2) {
+                c.lambda_nm = std::move(X2);
+                c.linear = std::move(Y2);
+            }
+            };
+        dedup_strict_curve(densB);
+        dedup_strict_curve(densG);
+        dedup_strict_curve(densR);
+
         JTRACE("BUILD", "precorrect: grid dedup applied to densR/G/B");
+
+        auto vmax = [](const Spectral::Curve& c) {
+            float m = 0.0f;
+            for (float v : c.linear) m = std::max(m, v);
+            if (!std::isfinite(m) || m <= 1e-4f) m = 1.0f;
+            if (m > 1000.0f) m = 1000.0f;
+            return m;
+            };
+        dirRT.dMax[0] = vmax(densB);
+        dirRT.dMax[1] = vmax(densG);
+        dirRT.dMax[2] = vmax(densR);
+
+        {
+            std::ostringstream oss;
+            oss << "DIR active=" << (dirRT.active ? 1 : 0)
+                << " sigma=" << static_cast<float>(P.sigma) << " high=" << static_cast<float>(P.high)
+                << " dMax=" << dirRT.dMax[0] << "," << dirRT.dMax[1] << "," << dirRT.dMax[2]
+                << " precorrect=" << (P.couplersPrecorrect ? 1 : 0);
+            JTRACE("BUILD", oss.str());
+        }
+    }
+
+    Spectral::NegativeCouplerParams negParams;
+    negParams.DmaxY = dirRT.dMax[0];
+    negParams.DmaxM = dirRT.dMax[1];
+    negParams.DmaxC = dirRT.dMax[2];
+    negParams.baseY = 0.0f;
+    negParams.baseM = 0.0f;
+    negParams.baseC = 0.0f;
+    negParams.kB = 6.0f;
+    negParams.kG = 6.0f;
+    negParams.kR = 6.0f;
+    {
+        const float defaultMask[9] = {
+            0.98f, -0.06f, -0.02f,
+           -0.03f,  0.98f, -0.05f,
+           -0.02f, -0.04f,  0.98f };
+        std::copy(std::begin(defaultMask), std::end(defaultMask), negParams.mask);
+    }
+
+    if (S.base.hasBaseline) {
+        const auto baseCoeffs = estimate_base_dyes(baseMin, epsY, epsM, epsC);
+        negParams.baseY = baseCoeffs[0];
+        negParams.baseM = baseCoeffs[1];
+        negParams.baseC = baseCoeffs[2];
     }
 
     const Profiles::DirCouplersProfile& dirCfg = S.base.dirCouplers;
-    if (P.couplersActive && dirCfg.valid) {
-        Couplers::Runtime runtime;
-        runtime.active = true;
-        runtime.highShift = static_cast<float>(P.high);
-        runtime.spatialSigmaPixels = static_cast<float>(P.spatialSigma);
-        for (int r = 0; r < 3; ++r)
-            for (int c = 0; c < 3; ++c)
-                runtime.M[r][c] = dirCfg.dirMatrix[r][c];
-        runtime.dMax[0] = dirCfg.maxDensityB;
-        runtime.dMax[1] = dirCfg.maxDensityG;
-        runtime.dMax[2] = dirCfg.maxDensityR;
-        Couplers::apply_runtime_to_density_curves(runtime);
-        sanitize_curve(Spectral::gDensityCurveB);
-        sanitize_curve(Spectral::gDensityCurveG);
-        sanitize_curve(Spectral::gDensityCurveR);
-        JTRACE("BUILD", "DIR couplers applied and sanitized");
+    if (dirCfg.hasData) {
+        auto computeK = [&](int idx) -> float {
+            float amount = std::isfinite(dirCfg.amount) ? dirCfg.amount : 1.0f;
+            if (amount <= 0.0f) amount = 0.1f;
+            float ratio = dirCfg.ratioRGB[idx];
+            if (!std::isfinite(ratio) || ratio <= 0.0f) ratio = 1.0f;
+            float k = 6.0f * amount * ratio;
+            if (!std::isfinite(k) || k <= 0.0f) k = 6.0f;
+            return std::clamp(k, 1.0f, 24.0f);
+            };
+        negParams.kB = computeK(0);
+        negParams.kG = computeK(1);
+        negParams.kR = computeK(2);
     }
 
-    Spectral::build_working_tables_from_base(
-        instance,
-        S.dataDir,
-        epsY, epsM, epsC,
-        sensB, sensG, sensR,
-        densB, densG, densR,
-        baseMin, baseMid,
-        hasBaseline,
-        sensB_beforeBalance, sensG_beforeBalance, sensR_beforeBalance,
-        illumRef,
-        hasRefIlluminant,
-        S.printRT,
-        S.base.densityMidNeutral,
-        S.base.maskingCouplers,
-        S);
+    const bool hasMaskingData = S.base.maskingCouplers.hasData;
+    if (dirCfg.hasData || hasMaskingData) {
+        float amountRGB[3] = { 1.0f, 1.0f, 1.0f };
+        if (dirCfg.hasData) {
+            for (int i = 0; i < 3; ++i) {
+                float ratio = dirCfg.ratioRGB[i];
+                if (!std::isfinite(ratio)) ratio = 1.0f;
+                if (ratio < 0.0f) ratio = 0.0f;
+                float amount = std::isfinite(dirCfg.amount) ? dirCfg.amount : 1.0f;
+                if (amount < 0.0f) amount = 0.0f;
+                amountRGB[i] = std::clamp(amount * ratio, 0.0f, 1.0f);
+            }
+        }
+
+        float dirMatrix[3][3] = { {0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f} };
+#ifdef JUICER_ENABLE_COUPLERS
+        Couplers::build_dir_matrix(dirMatrix, amountRGB, dirCfg.hasData ? dirCfg.diffusionInterlayer : 0.0f);
+#else
+        auto build_dir_matrix_local = [](float M[3][3], const float amountValues[3], float layerSigma) {
+            const float sigma = std::isfinite(layerSigma) ? std::max(0.0f, layerSigma) : 0.0f;
+            float amt[3] = { amountValues[0], amountValues[1], amountValues[2] };
+            const float sigmaCapped = std::min(sigma, 3.0f);
+            for (int i = 0; i < 3; ++i) {
+                if (!std::isfinite(amt[i])) amt[i] = 0.0f;
+                amt[i] = std::clamp(amt[i], 0.0f, 1.0f);
+            }
+            auto gauss = [sigmaCapped](int dx) -> float {
+                if (sigmaCapped <= 0.0f) {
+                    return (dx == 0) ? 1.0f : 0.0f;
+                }
+                const float s2 = sigmaCapped * sigmaCapped;
+                return std::exp(-0.5f * (dx * dx) / s2);
+                };
+            for (int r = 0; r < 3; ++r) {
+                float row[3];
+                float wsum = 0.0f;
+                for (int c = 0; c < 3; ++c) {
+                    row[c] = gauss(c - r);
+                    wsum += row[c];
+                }
+                if (wsum > 0.0f) {
+                    for (int c = 0; c < 3; ++c) {
+                        row[c] /= wsum;
+                    }
+                }
+                for (int c = 0; c < 3; ++c) {
+                    M[r][c] = amt[r] * row[c];
+                }
+            }
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    if (!std::isfinite(M[r][c])) {
+                        M[r][c] = 0.0f;
+                    }
+                }
+            }
+            };
+        build_dir_matrix_local(dirMatrix, amountRGB, dirCfg.hasData ? dirCfg.diffusionInterlayer : 0.0f);
+#endif
+
+        std::array<float, 3> gaussianSum{ 0.0f, 0.0f, 0.0f };
+        if (hasMaskingData) {
+            for (int ch = 0; ch < 3; ++ch) {
+                const auto& channel = S.base.maskingCouplers.gaussianModel[ch];
+                for (const auto& tri : channel) {
+                    float amp = tri[2];
+                    if (!std::isfinite(amp)) amp = 0.0f;
+                    gaussianSum[ch] += std::fabs(amp);
+                }
+            }
+        }
+
+        const float maskScaleBase = 0.25f;
+        const float maskScaleOffset = hasMaskingData ? 0.05f : 0.0f;
+        for (int r = 0; r < 3; ++r) {
+            float sum = hasMaskingData ? gaussianSum[r] : 0.0f;
+            if (!std::isfinite(sum)) sum = 0.0f;
+            float amountRow = dirCfg.hasData ? amountRGB[r] : 1.0f;
+            if (!std::isfinite(amountRow) || amountRow < 0.0f) amountRow = 0.0f;
+            float scale = maskScaleBase * (sum + maskScaleOffset);
+            if (dirCfg.hasData) {
+                scale *= amountRow;
+            }
+            scale = std::clamp(scale, 0.0f, 0.25f);
+            for (int c = 0; c < 3; ++c) {
+                float val = dirMatrix[r][c];
+                if (!std::isfinite(val)) {
+                    val = (r == c) ? 1.0f : 0.0f;
+                }
+                const float delta = scale * val;
+                if (r == c) {
+                    float diag = 1.0f - delta;
+                    if (!std::isfinite(diag)) diag = 1.0f;
+                    if (diag < 0.0f) diag = 0.0f;
+                    negParams.mask[r * 3 + c] = diag;
+                }
+                else {
+                    float off = -delta;
+                    if (!std::isfinite(off)) off = 0.0f;
+                    off = std::clamp(off, -1.0f, 1.0f);
+                    negParams.mask[r * 3 + c] = off;
+                }
+            }
+        }
+    }
+
+    WorkingState* target = S.inactive();
+    while (S.renderWS.load(std::memory_order_acquire) == target &&
+        S.rendersInFlight.load(std::memory_order_acquire) > 0)
+    {
+        S.renderCv.wait(lk);
+        target = S.inactive();
+    }
+    target->negParams = negParams;
+
+    Spectral::build_tables_from_curves_non_global(
+        /*epsY*/ epsY, /*epsM*/ epsM, /*epsC*/ epsC,
+        /*xbar*/ Spectral::gXBar, /*ybar*/ Spectral::gYBar, /*zbar*/ Spectral::gZBar,
+        /*illumView*/ S.printRT.illumView,
+        /*baseMin*/ baseMin, /*baseMid*/ baseMid, /*hasBaseline*/ hasBaseline,
+        target->tablesView);
+
+    if (hasRefIlluminant) {
+        Spectral::build_tables_from_curves_non_global(
+            /*epsY*/ epsY, /*epsM*/ epsM, /*epsC*/ epsC,
+            /*xbar*/ Spectral::gXBar, /*ybar*/ Spectral::gYBar, /*zbar*/ Spectral::gZBar,
+            /*illumView*/ illumRef,
+            /*baseMin*/ baseMin, /*baseMid*/ baseMid, /*hasBaseline*/ hasBaseline,
+            target->tablesRef);
+    }
+    else {
+        target->tablesRef = SpectralTables{};
+    }
+
+    if (Print::profile_is_valid(S.printRT.profile) &&
+        S.printRT.illumView.linear.size() == static_cast<size_t>(Spectral::gShape.K))
+    {
+        Spectral::build_tables_from_curves_non_global(
+            /*epsY*/ S.printRT.profile.epsY,
+            /*epsM*/ S.printRT.profile.epsM,
+            /*epsC*/ S.printRT.profile.epsC,
+            /*xbar*/ Spectral::gXBar, /*ybar*/ Spectral::gYBar, /*zbar*/ Spectral::gZBar,
+            /*illumView*/ S.printRT.illumView,
+            /*baseMin*/ S.printRT.profile.baseMin,
+            /*baseMid*/ S.printRT.profile.baseMid,
+            /*hasBaseline*/ S.printRT.profile.hasBaseline,
+            target->tablesPrint);
+    }
+    else {
+        target->tablesPrint = SpectralTables{};
+    }
+
+    Spectral::Curve illumScan = Spectral::build_curve_D50_pinned(S.dataDir + "Illuminants\\D50.csv");
+    Spectral::build_tables_from_curves_non_global(
+        /*epsY*/ epsY, /*epsM*/ epsM, /*epsC*/ epsC,
+        /*xbar*/ Spectral::gXBar, /*ybar*/ Spectral::gYBar, /*zbar*/ Spectral::gZBar,
+        /*illumView*/ illumScan,
+        /*baseMin*/ baseMin, /*baseMid*/ baseMid, /*hasBaseline*/ hasBaseline,
+        target->tablesScan);
+
+    if (hasRefIlluminant && target->tablesRef.K > 0) {
+        Spectral::compute_S_inverse_from_tables(target->tablesRef, target->spdSInv);
+        target->spdReady = true;
+    }
+    else {
+        target->spdReady = false;
+    }
+
+    if (target->tablesView.K <= 0) {
+        JTRACE("BUILD", "tablesView not ready; will cause wsReady=0 in render.");
+    }
+    if (hasRefIlluminant) {
+        if (!target->spdReady || target->tablesRef.K <= 0) {
+            JTRACE("BUILD", "tablesRef or spdSInv not ready; SPD exposure disabled.");
+        }
+    }
+    else {
+        JTRACE("BUILD", "reference illuminant missing; SPD exposure disabled.");
+    }
+
+    {
+        auto finiteCurve = [](const Spectral::Curve& c)->bool {
+            for (float v : c.linear) if (!std::isfinite(v)) return false;
+            return true;
+            };
+        const bool ok_dens = finiteCurve(densB) && finiteCurve(densG) && finiteCurve(densR);
+        const bool ok_sens = finiteCurve(sensB) && finiteCurve(sensG) && finiteCurve(sensR);
+        const bool ok_base = finiteCurve(baseMin) && finiteCurve(baseMid);
+        const bool ok_tables =
+            (target->tablesView.K == Spectral::gShape.K) &&
+            (target->tablesScan.K == Spectral::gShape.K) &&
+            (!target->spdReady || target->tablesRef.K == Spectral::gShape.K);
+
+        std::ostringstream oss;
+        oss << "pre-Ecal: ok_dens=" << (ok_dens ? 1 : 0)
+            << " ok_sens=" << (ok_sens ? 1 : 0)
+            << " ok_base=" << (ok_base ? 1 : 0)
+            << " ok_tables=" << (ok_tables ? 1 : 0)
+            << " spdReady=" << (target->spdReady ? 1 : 0);
+        JTRACE("BUILD", oss.str());
+
+        if (!(ok_dens && ok_sens && ok_base && ok_tables)) {
+            JTRACE("BUILD", "pre-Ecal: invalid inputs; aborting rebuild to avoid crash");
+            return;
+        }
+    }
+
+    {
+        bool ok_spd = true;
+        for (int i = 0; i < 9; ++i) {
+            if (!std::isfinite(target->spdSInv[i])) { ok_spd = false; break; }
+        }
+        const bool ok_invYn =
+            std::isfinite(target->tablesView.invYn) && target->tablesView.invYn > 0.0f &&
+            std::isfinite(target->tablesScan.invYn) && target->tablesScan.invYn > 0.0f &&
+            (!target->spdReady || (std::isfinite(target->tablesRef.invYn) && target->tablesRef.invYn > 0.0f));
+
+        std::ostringstream oss;
+        oss << "pre-Ecal: ok_spd=" << (ok_spd ? 1 : 0)
+            << " ok_invYn=" << (ok_invYn ? 1 : 0);
+        JTRACE("BUILD", oss.str());
+
+        if (!ok_spd || !ok_invYn) {
+            JTRACE("BUILD", "pre-Ecal: invalid S_inv or invYn; aborting rebuild");
+            return;
+        }
+    }
+
+    const float offB = 0.0f;
+    const float offG = 0.0f;
+    const float offR = 0.0f;
+
+    {
+        std::ostringstream oss;
+        oss << "negative logE offsets B/G/R=" << offB << "/" << offG << "/" << offR << " (agx parity)";
+        JTRACE("BUILD", oss.str());
+    }
+
+    target->densB = std::move(densB);
+    target->densG = std::move(densG);
+    target->densR = std::move(densR);
+    target->sensB = std::move(sensB);
+    target->sensG = std::move(sensG);
+    target->sensR = std::move(sensR);
+    target->negSensB = std::move(sensB_beforeBalance);
+    target->negSensG = std::move(sensG_beforeBalance);
+    target->negSensR = std::move(sensR_beforeBalance);
+    target->baseMin = std::move(baseMin);
+    target->baseMid = std::move(baseMid);
+    target->hasBaseline = hasBaseline;
+
+    target->logEOffB = offB;
+    target->logEOffG = offG;
+    target->logEOffR = offR;
+
+    target->dirRT = dirRT;
+    target->dirPrecorrected = precorrectApplied;
+    target->dMax[0] = dirRT.dMax[0];
+    target->dMax[1] = dirRT.dMax[1];
+    target->dMax[2] = dirRT.dMax[2];
+
+    {
+        const WorkingState* prev = S.activeWS.load(std::memory_order_acquire);
+        if (prev && prev->buildCounter > 0) {
+            const bool sameCouplers =
+                (prev->dirRT.highShift == target->dirRT.highShift) &&
+                (prev->dirRT.M[0][0] == target->dirRT.M[0][0]) &&
+                (prev->dirRT.M[0][1] == target->dirRT.M[0][1]) &&
+                (prev->dirRT.M[0][2] == target->dirRT.M[0][2]) &&
+                (prev->dirRT.M[1][0] == target->dirRT.M[1][0]) &&
+                (prev->dirRT.M[1][1] == target->dirRT.M[1][1]) &&
+                (prev->dirRT.M[1][2] == target->dirRT.M[1][2]) &&
+                (prev->dirRT.M[2][0] == target->dirRT.M[2][0]) &&
+                (prev->dirRT.M[2][1] == target->dirRT.M[2][1]) &&
+                (prev->dirRT.M[2][2] == target->dirRT.M[2][2]) &&
+                (prev->dirRT.spatialSigmaPixels == target->dirRT.spatialSigmaPixels);
+
+            if (sameCouplers && prev->dirPrecorrected == target->dirPrecorrected) {
+                target->densB = prev->densB;
+                target->densG = prev->densG;
+                target->densR = prev->densR;
+                target->dMax[0] = prev->dMax[0];
+                target->dMax[1] = prev->dMax[1];
+                target->dMax[2] = prev->dMax[2];
+                target->dirRT.dMax[0] = prev->dirRT.dMax[0];
+                target->dirRT.dMax[1] = prev->dirRT.dMax[1];
+                target->dirRT.dMax[2] = prev->dirRT.dMax[2];
+                target->negParams = prev->negParams;
+            }
+        }
+    }
+
+    {
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                float v = target->dirRT.M[r][c];
+                if (!std::isfinite(v)) v = 0.0f;
+                if (v < -10.0f) v = -10.0f;
+                if (v > 10.0f)  v = 10.0f;
+                target->dirRT.M[r][c] = v;
+            }
+        }
+        for (int i = 0; i < 3; ++i) {
+            float v = target->dMax[i];
+            if (!std::isfinite(v) || v <= 1e-4f) v = 1.0f;
+            if (v > 1000.0f) v = 1000.0f;
+            target->dMax[i] = v;
+            target->dirRT.dMax[i] = v;
+        }
+    }
+
+    Spectral::set_neg_params(target->negParams);
+
+    {
+        Spectral::DirRuntimeSnapshot snap;
+        snap.active = target->dirRT.active;
+        snap.highShift = target->dirRT.highShift;
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                snap.M[r][c] = target->dirRT.M[r][c];
+            }
+        }
+        snap.dMax[0] = target->dirRT.dMax[0];
+        snap.dMax[1] = target->dirRT.dMax[1];
+        snap.dMax[2] = target->dirRT.dMax[2];
+        Spectral::set_dir_runtime_snapshot(snap);
+    }
+
+    target->printRT = std::make_unique<Print::Runtime>(S.printRT);
+
+    ++target->buildCounter;
+
+    {
+        std::ostringstream oss;
+        oss << "WorkingState build #" << target->buildCounter;
+        JTRACE("BUILD", oss.str());
+    }
+
+    S.activeWS.store(target, std::memory_order_release);
+    {
+        std::ostringstream oss;
+        oss << "activeWS swapped; buildCounter=" << (long long)S.activeBuildCounter;
+        JTRACE("BUILD", oss.str());
+    }
+    S.activeBuildCounter = target->buildCounter;
 }
