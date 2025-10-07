@@ -1,6 +1,5 @@
 // JuicerProcessing.h
 #pragma once
-#define JUICER_ENABLE_COUPLERS 1
 
 #include "ofxsProcessing.h"
 #include "ofxsImageEffect.h"

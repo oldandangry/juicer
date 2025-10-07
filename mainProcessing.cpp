@@ -1,6 +1,5 @@
 // JuicerProcessing.cpp
 
-#define JUICER_ENABLE_COUPLERS 1
 #include <vector>
 #include <cmath>
 #include <algorithm>

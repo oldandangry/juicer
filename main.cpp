@@ -1,6 +1,6 @@
-#define JUICER_ENABLE_COUPLERS 1
 
 #include <mutex>
+#include <condition_variable>
 #include <cctype>
 
 // OpenFX 1.4 canonical headers (no non-spec feature macros)
@@ -185,6 +185,9 @@ struct InstanceState {
     WorkingState workA;
     WorkingState workB;
     std::atomic<WorkingState*> activeWS{ nullptr };
+    std::atomic<int> rendersInFlight{ 0 };
+    std::atomic<WorkingState*> renderWS{ nullptr };
+    std::condition_variable renderCv;
     uint64_t activeBuildCounter = 0;
 
     ParamSnapshot lastParams;
@@ -637,9 +640,9 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
 
     JTRACE_SCOPE("BUILD", "rebuild_working_state");
 
-    std::lock_guard<std::mutex> lk(S.m);
+    std::unique_lock<std::mutex> lk(S.m);
 
-    // INSERT AFTER std::lock_guard<std::mutex> lk(S.m);
+    // INSERT AFTER acquiring S.m lock
     {
         std::ostringstream oss;
         oss << "enter with baseLoaded=" << (S.baseLoaded ? 1 : 0);
@@ -1073,6 +1076,12 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         }
     }
     WorkingState* target = S.inactive();
+    while (S.renderWS.load(std::memory_order_acquire) == target &&
+        S.rendersInFlight.load(std::memory_order_acquire) > 0)
+    {
+        S.renderCv.wait(lk);
+        target = S.inactive();
+    }
     target->negParams = negParams;
 
 
@@ -1620,9 +1629,10 @@ public:
 #endif
 
 
-        const WorkingState* ws = (_state && _state->baseLoaded)
+        WorkingState* activeWorkingState = (_state && _state->baseLoaded)
             ? _state->activeWS.load(std::memory_order_acquire)
             : nullptr;
+        const WorkingState* ws = activeWorkingState;
         const Print::Runtime* prt = (ws && ws->buildCounter > 0 && ws->printRT) ? ws->printRT.get() : nullptr;
         
 
@@ -1675,6 +1685,29 @@ public:
         proc.setOutputEncoding(outputEncodingParams);
         proc.setRenderWindowRect(roi);
         proc.setGPURenderArgs(args);
+
+        struct RenderGuard {
+            InstanceState* state;
+            WorkingState* ws;
+            RenderGuard(InstanceState* s, WorkingState* w) : state(s), ws(w) {
+                if (state) {
+                    state->rendersInFlight.fetch_add(1, std::memory_order_acq_rel);
+                    state->renderWS.store(w, std::memory_order_release);
+                }
+            }
+            ~RenderGuard() {
+                if (state) {
+                    const int prev = state->rendersInFlight.fetch_sub(1, std::memory_order_acq_rel);
+                    if (prev <= 1) {
+                        WorkingState* expected = ws;
+                        state->renderWS.compare_exchange_strong(
+                            expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire);
+                    }
+                    state->renderCv.notify_all();
+                }
+            }
+        } guard(_state.get(), activeWorkingState);
+
         // Dispatch to support library's threaded/tiled CPU path
         proc.process();
     }
