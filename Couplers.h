@@ -592,9 +592,17 @@ namespace Couplers {
     inline void apply_runtime(ApplyInput& io, const Runtime& rt) {
         if (!rt.active) return;
 
-        float nB = std::clamp(io.D[0] / rt.dMax[0], 0.0f, 1.0f);
-        float nG = std::clamp(io.D[1] / rt.dMax[1], 0.0f, 1.0f);
-        float nR = std::clamp(io.D[2] / rt.dMax[2], 0.0f, 1.0f);
+        auto safe_norm = [](float D, float dmax)->float {
+            float Din = (!std::isfinite(D) || D < 0.0f) ? 0.0f : D;
+            float m = (std::isfinite(dmax) && dmax > 1e-6f) ? dmax : 1.0f;
+            float n = Din / m;
+            if (!std::isfinite(n) || n < 0.0f) n = 0.0f;
+            return n;
+            };
+
+        float nB = safe_norm(io.D[0], rt.dMax[0]);
+        float nG = safe_norm(io.D[1], rt.dMax[1]);
+        float nR = safe_norm(io.D[2], rt.dMax[2]);
         nB += rt.highShift * nB * nB;
         nG += rt.highShift * nG * nG;
         nR += rt.highShift * nR * nR;
@@ -627,8 +635,8 @@ namespace Couplers {
             float Din = (!std::isfinite(D) || D < 0.0f) ? 0.0f : D;
             float m = (std::isfinite(dmax) && dmax > 1e-4f) ? dmax : 1.0f; // slightly higher floor
             float n = Din / m;
-            if (!std::isfinite(n)) n = 0.0f;
-            return std::min(std::max(n, 0.0f), 1.0f);
+            if (!std::isfinite(n) || n < 0.0f) n = 0.0f;
+            return n;
             };
 
 
@@ -640,11 +648,9 @@ namespace Couplers {
         auto high_boost = [&](float n)->float {
             float nb = n + rt.highShift * n * n;
             if (!std::isfinite(nb)) {
-                return n;
+                return (n >= 0.0f && std::isfinite(n)) ? n : 0.0f;
             }
-            if (nb < 0.0f) {
-                nb = 0.0f;
-            }
+            if (nb < 0.0f) nb = 0.0f;
             return nb;
             };
         nB = high_boost(nB);
