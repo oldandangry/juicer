@@ -18,6 +18,7 @@ namespace OutputEncoding {
     struct Params {
         ColorSpace colorSpace = ColorSpace::sRGB;
         bool applyCctfEncoding = true;
+        bool preserveLinearRange = false;
     };
 
     inline constexpr const char* kColorSpaceLabels[] = {

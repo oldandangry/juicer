@@ -281,6 +281,7 @@ static bool load_resampled_channel(const std::string& path,
 // Output encoding parameters
 #define kParamOutputColorSpace "OutputColorSpace"
 #define kParamOutputCctfEncoding "OutputCctfEncoding"
+#define kParamOutputLinearPassThrough "OutputLinearPassThrough"
 
 // Print paper options (folders under Resources/Print)
 static const char* kPrintPaperOptions[] = {
@@ -1346,6 +1347,7 @@ public:
             _pEnlIll = fetchChoiceParam("EnlargerIlluminant");
             _pOutputColorSpace = fetchChoiceParam(kParamOutputColorSpace);
             _pOutputCctfEncoding = fetchBooleanParam(kParamOutputCctfEncoding);
+            _pOutputLinearPassThrough = fetchBooleanParam(kParamOutputLinearPassThrough);
 
             _pUnmix = fetchBooleanParam("UnmixDensities");
 
@@ -1479,8 +1481,11 @@ public:
             if (_pOutputColorSpace) _pOutputColorSpace->getValue(csIndex);
             bool applyCctf = true;
             if (_pOutputCctfEncoding) _pOutputCctfEncoding->getValue(applyCctf);
+            bool preserveLinear = false;
+            if (_pOutputLinearPassThrough) _pOutputLinearPassThrough->getValue(preserveLinear);
             outputEncodingParams.colorSpace = OutputEncoding::colorSpaceFromIndex(csIndex);
             outputEncodingParams.applyCctfEncoding = applyCctf;
+            outputEncodingParams.preserveLinearRange = preserveLinear;
         }
 
         // --- Auto exposure compensation (camera) and print exposure compensation ---
@@ -1674,6 +1679,7 @@ private:
     OFX::ChoiceParam* _pEnlIll = nullptr;
     OFX::ChoiceParam* _pOutputColorSpace = nullptr;
     OFX::BooleanParam* _pOutputCctfEncoding = nullptr;
+    OFX::BooleanParam* _pOutputLinearPassThrough = nullptr;
 
     OFX::BooleanParam* _pUnmix = nullptr;
 
@@ -2238,6 +2244,13 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
             OFX::BooleanParamDescriptor* p = desc.defineBooleanParam(kParamOutputCctfEncoding);
             p->setLabel("Apply output CCTF");
             p->setDefault(true);
+            if (grpOutput) p->setParent(*grpOutput);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::BooleanParamDescriptor* p = desc.defineBooleanParam(kParamOutputLinearPassThrough);
+            p->setLabel("Output linear pass-through");
+            p->setDefault(false);
             if (grpOutput) p->setParent(*grpOutput);
             p->setEvaluateOnChange(true);
         }

@@ -68,6 +68,13 @@ namespace OutputEncoding {
         float converted[3];
         convertFromDWG(params.colorSpace, rgb, converted);
 
+        if (params.preserveLinearRange) {
+            rgb[0] = converted[0];
+            rgb[1] = converted[1];
+            rgb[2] = converted[2];
+            return;
+        }
+
         if (params.applyCctfEncoding && hasEncoding(params.colorSpace)) {
             rgb[0] = encode_sRGB(converted[0]);
             rgb[1] = encode_sRGB(converted[1]);
