@@ -153,7 +153,8 @@ namespace Couplers {
             t = (std::isfinite(t) ? std::clamp(t, 0.0f, 1.0f) : 0.0f);
             float tb = t + highExpShift * t * t;
             if (!std::isfinite(tb)) tb = t;
-            return std::clamp(tb, 0.0f, 1.0f);
+            if (tb < 0.0f) tb = 0.0f;
+            return tb;
             };
 
         std::vector<float> nB(N), nG(N), nR(N);
@@ -296,7 +297,10 @@ namespace Couplers {
         auto boost = [highExpShift](float t)->float {
             // keep non-negative; agx-style quadratic shift
             t = std::clamp(t, 0.0f, 1.0f);
-            return t + highExpShift * t * t;
+            float tb = t + highExpShift * t * t;
+            if (!std::isfinite(tb)) tb = t;
+            if (tb < 0.0f) tb = 0.0f;
+            return tb;
             };
 
         std::vector<float> nB(N), nG(N), nR(N);
@@ -635,8 +639,13 @@ namespace Couplers {
         // high-exposure quadratic boost (agx: n += k * n^2)
         auto high_boost = [&](float n)->float {
             float nb = n + rt.highShift * n * n;
-            if (!std::isfinite(nb)) nb = n;
-            return std::min(std::max(nb, 0.0f), 1.0f);
+            if (!std::isfinite(nb)) {
+                return n;
+            }
+            if (nb < 0.0f) {
+                nb = 0.0f;
+            }
+            return nb;
             };
         nB = high_boost(nB);
         nG = high_boost(nG);
@@ -673,6 +682,9 @@ namespace Couplers {
     inline void apply_runtime_logE(ApplyInputLogE& io, const Runtime& rt) {
         if (!rt.active) return;
         float a[3]; compute_logE_corrections(io, rt, a);
+        for (float& v : a) {
+            if (!std::isfinite(v)) v = 0.0f;
+        }
         io.logE[0] -= a[0]; // Blue layer
         io.logE[1] -= a[1]; // Green layer
         io.logE[2] -= a[2]; // Red layer
@@ -702,6 +714,9 @@ namespace Couplers {
     {
         if (!rt.active) return;
         float a[3]; compute_logE_corrections(io, rt, a);
+        for (float& v : a) {
+            if (!std::isfinite(v)) v = 0.0f;
+        }
         io.logE[0] -= a[0];
         io.logE[1] -= a[1];
         io.logE[2] -= a[2];

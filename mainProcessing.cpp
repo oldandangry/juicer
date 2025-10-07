@@ -342,6 +342,9 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 float aCorr[3];
                 Couplers::ApplyInputLogE io{ { leB, leG, leR }, { D_Y, D_M, D_C } };
                 Couplers::compute_logE_corrections(io, _dirRT, aCorr);
+                for (float& v : aCorr) {
+                    if (!std::isfinite(v)) v = 0.0f;
+                }
                 aY[idx] = aCorr[0];
                 aM[idx] = aCorr[1];
                 aC[idx] = aCorr[2];
