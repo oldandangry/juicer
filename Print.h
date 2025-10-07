@@ -748,7 +748,8 @@ namespace Print {
         const WorkingState& ws,
         const Runtime& rt,
         const Params& prm,
-        float exposureCompScale)
+        float exposureCompScale,
+        float channelScaleOut[3] = nullptr)
     {
         // If slider EV scale is not meaningful, skip compensation.
         if (!std::isfinite(exposureCompScale) || exposureCompScale <= 0.0f) return 1.0f;
@@ -828,10 +829,11 @@ namespace Print {
         float raw[3];
         raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw);
 
-        // 8) Anchor on the green RAW probe, but apply the print/view correction
-        //    back to the entire raw vector (agx-emulsion parity). This ensures
-        //    green remains the fixed anchor while the other channels are shifted
-        //    into alignment, avoiding residual 1/correction imbalance.
+        // 8) Anchor on the raw green probe, then rescale the other channels so midgray
+        //    matches agx-emulsion's balanced densities. Agx aligns magenta to zero log
+        //    exposure and shifts cyan/yellow relative to it, so mirror that here by
+        //    normalising the raw vector against the green probe.
+        float g = std::max(1e-12f, raw[1]);
         if (ws.tablesPrint.K > 0 && ws.tablesView.K > 0) {
             float XYZ_view[3] = { 0.0f, 0.0f, 0.0f };
             float XYZ_print[3] = { 0.0f, 0.0f, 0.0f };
@@ -843,14 +845,23 @@ namespace Print {
             const float Y_print = XYZ_print[1];
             if (std::isfinite(Y_view) && std::isfinite(Y_print) && Y_view > 0.0f && Y_print > 0.0f) {
                 const float correction = Y_print / Y_view;
-                raw[0] *= correction;
-                raw[1] *= correction;
-                raw[2] *= correction;
+                g = std::max(1e-12f, g * correction);
             }
         }
 
-        // Anchor on corrected green probe
-        float g = std::max(1e-12f, raw[1]);
+        float channelScale[3] = { 1.0f, 1.0f, 1.0f };
+        const float safeG = g;
+        const float safeC = std::max(1e-12f, raw[0]);
+        const float safeY = std::max(1e-12f, raw[2]);
+        channelScale[0] = std::clamp(safeG / safeC, 1e-6f, 1e6f);
+        channelScale[1] = 1.0f;
+        channelScale[2] = std::clamp(safeG / safeY, 1e-6f, 1e6f);
+
+        if (channelScaleOut) {
+            channelScaleOut[0] = channelScale[0];
+            channelScaleOut[1] = channelScale[1];
+            channelScaleOut[2] = channelScale[2];
+        }
 
         // 9) Factor is inverse of the print-normalised midgrey green RAW.
         return 1.0f / g;
@@ -1000,16 +1011,19 @@ namespace Print {
         const float exposureCompScale = prm.exposureCompensationEnabled
             ? prm.exposureCompensationScale
             : 1.0f;
-        const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
+        float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
+        const float kMid = compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale, midgrayScale);
         const float rawScale = expPrint * kMid;
-        raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
+        raw[0] *= rawScale * midgrayScale[0];
+        raw[1] *= rawScale * midgrayScale[1];
+        raw[2] *= rawScale * midgrayScale[2];
 
         if (std::isfinite(prm.preflashExposure) && prm.preflashExposure > 0.0f) {
             float rawPre[3];
             compute_preflash_raw(rt, ws, Tpreflash, Ee_preflash, rawPre);
-            raw[0] += rawPre[0] * prm.preflashExposure;
-            raw[1] += rawPre[1] * prm.preflashExposure;
-            raw[2] += rawPre[2] * prm.preflashExposure;
+            raw[0] += rawPre[0] * prm.preflashExposure * midgrayScale[0];
+            raw[1] += rawPre[1] * prm.preflashExposure * midgrayScale[1];
+            raw[2] += rawPre[2] * prm.preflashExposure * midgrayScale[2];
         }
 
         // 6) RAW → print densities via DC curves and per-channel logE offsets
@@ -1061,11 +1075,15 @@ namespace Print {
         const WorkingState& ws,
         float exposureScale,
         float kMid_spectral,
+        const float* midgrayScale_in,
         float rgbOut[3])
     {
         if (ws.tablesPrint.K <= 0) {
             return;
         }
+
+        float midgrayScaleStorage[3] = { 1.0f, 1.0f, 1.0f };
+        const float* midgrayScale = midgrayScale_in ? midgrayScale_in : midgrayScaleStorage;
 
         // 1) Negative densities with DIR in logE domain (per-instance SPD vs Matrix)
         float E[3];
@@ -1173,18 +1191,24 @@ namespace Print {
         const float exposureCompScale = prm.exposureCompensationEnabled
             ? prm.exposureCompensationScale
             : 1.0f;
-        const float kMid = (std::isfinite(kMid_spectral) && kMid_spectral > 0.0f)
+        const bool hasPrecomputedMid = std::isfinite(kMid_spectral) && kMid_spectral > 0.0f;
+        const float kMid = hasPrecomputedMid
             ? kMid_spectral
-            : compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale);
+            : compute_exposure_factor_midgray(ws, rt, prm, exposureCompScale, midgrayScaleStorage);
+        if (!hasPrecomputedMid) {
+            midgrayScale = midgrayScaleStorage;
+        }
         const float rawScale = expPrint * kMid;
-        raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
+        raw[0] *= rawScale * midgrayScale[0];
+        raw[1] *= rawScale * midgrayScale[1];
+        raw[2] *= rawScale * midgrayScale[2];
 
         if (std::isfinite(prm.preflashExposure) && prm.preflashExposure > 0.0f) {
             float rawPre[3];
             compute_preflash_raw(rt, ws, Tpreflash, Ee_preflash, rawPre);
-            raw[0] += rawPre[0] * prm.preflashExposure;
-            raw[1] += rawPre[1] * prm.preflashExposure;
-            raw[2] += rawPre[2] * prm.preflashExposure;
+            raw[0] += rawPre[0] * prm.preflashExposure * midgrayScale[0];
+            raw[1] += rawPre[1] * prm.preflashExposure * midgrayScale[1];
+            raw[2] += rawPre[2] * prm.preflashExposure * midgrayScale[2];
         }
 
 

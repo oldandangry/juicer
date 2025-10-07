@@ -177,7 +177,8 @@ namespace JuicerProc {
         const float exposureCompScale = prm.exposureCompensationEnabled
             ? prm.exposureCompensationScale
             : 1.0f;
-        const float kMid_spectral = Print::compute_exposure_factor_midgray(*ws, *prt, prm, exposureCompScale);
+        float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
+        const float kMid_spectral = Print::compute_exposure_factor_midgray(*ws, *prt, prm, exposureCompScale, midgrayScale);
 
         // Map preview pixel centers to source coordinates (nearest neighbor)
         for (int yy = 0; yy < outH; ++yy) {
@@ -205,6 +206,7 @@ namespace JuicerProc {
                     *prt, dirRT, *ws,
                     /*exposureScale*/ exposureScale,
                     kMid_spectral,
+                    midgrayScale,
                     rgbOut);
 
                 OutputEncoding::applyEncoding(outputEncoding, rgbOut);
@@ -371,7 +373,8 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
         const float exposureCompScale = _printParams.exposureCompensationEnabled
             ? _printParams.exposureCompensationScale
             : 1.0f;
-        const float kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale);        
+        float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
+        const float kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale, midgrayScale);
 
         // Pass B
         for (int yy = 0; yy < tileH; ++yy) {
@@ -500,14 +503,16 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
 
                     // 5) Apply print exposure ONCE (agx: raw *= exposure) + midgray compensation (vector)
                     const float rawScale = _printParams.exposure * kMid_spectral;
-                    raw[0] *= rawScale; raw[1] *= rawScale; raw[2] *= rawScale;
+                    raw[0] *= rawScale * midgrayScale[0];
+                    raw[1] *= rawScale * midgrayScale[1];
+                    raw[2] *= rawScale * midgrayScale[2];
 
                     if (std::isfinite(_printParams.preflashExposure) && _printParams.preflashExposure > 0.0f) {
                         float rawPre[3];
                         Print::compute_preflash_raw(*_prt, *_ws, Tpreflash, Ee_preflash, rawPre);
-                        raw[0] += rawPre[0] * _printParams.preflashExposure;
-                        raw[1] += rawPre[1] * _printParams.preflashExposure;
-                        raw[2] += rawPre[2] * _printParams.preflashExposure;
+                        raw[0] += rawPre[0] * _printParams.preflashExposure * midgrayScale[0];
+                        raw[1] += rawPre[1] * _printParams.preflashExposure * midgrayScale[1];
+                        raw[2] += rawPre[2] * _printParams.preflashExposure * midgrayScale[2];
                     }
 
                     // 6) Map to print densities via calibrated per-channel logE offsets and DC curves
@@ -545,12 +550,13 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
         return;
     }
 
+    float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
     float kMid_spectral = 0.0f;
     if (_wsReady && _ws && _printReady && _prt && !_printParams.bypass) {
         const float exposureCompScale = _printParams.exposureCompensationEnabled
             ? _printParams.exposureCompensationScale
             : 1.0f;
-        kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale);
+        kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale, midgrayScale);
     }
 
     // Fallback path
@@ -579,6 +585,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                             *_prt, _dirRT, *_ws,
                             _exposureScale,
                             kMid_spectral,
+                            midgrayScale,
                             rgbOut);
                     }
                 }
