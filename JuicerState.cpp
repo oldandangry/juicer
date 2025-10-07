@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-extern const std::string gDataDir;
 
 namespace {
     static const char* kPrintPaperOptions[] = {

@@ -46,6 +46,8 @@ namespace JuicerTrace {
 #define JTRACE(tag, msg) ::JuicerTrace::write(tag, (msg))
 #define JTRACE_SCOPE(tag, name) ::JuicerTrace::Scope _juicer_scope_guard_((tag), (name))
 
+extern const std::string gDataDir;
+
 struct BaseState {
     Spectral::Curve epsY, epsM, epsC;
     Spectral::Curve sensB, sensG, sensR;
