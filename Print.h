@@ -828,15 +828,10 @@ namespace Print {
         float raw[3];
         raw_exposures_from_filtered_light(rt.profile, Ee_filtered, raw);
 
-        // 8) Anchor on the green RAW probe but reconcile it with the print domain.
-        //    In agx-emulsion the balance_density() step keeps green fixed at zero
-        //    log exposure while shifting the other layers so their density curves
-        //    sit on top of it. The equivalent in the print pipeline is to measure
-        //    the filtered light in both the film/view space and the print paper
-        //    space, then remap the green probe so it reflects the paper's density
-        //    response. This prevents the green anchor from "floating" when the
-        //    paper model introduces cross-talk.
-        float g = std::max(1e-12f, raw[1]);
+        // 8) Anchor on the green RAW probe, but apply the print/view correction
+        //    back to the entire raw vector (agx-emulsion parity). This ensures
+        //    green remains the fixed anchor while the other channels are shifted
+        //    into alignment, avoiding residual 1/correction imbalance.
         if (ws.tablesPrint.K > 0 && ws.tablesView.K > 0) {
             float XYZ_view[3] = { 0.0f, 0.0f, 0.0f };
             float XYZ_print[3] = { 0.0f, 0.0f, 0.0f };
@@ -848,15 +843,18 @@ namespace Print {
             const float Y_print = XYZ_print[1];
             if (std::isfinite(Y_view) && std::isfinite(Y_print) && Y_view > 0.0f && Y_print > 0.0f) {
                 const float correction = Y_print / Y_view;
-                g = std::max(1e-12f, g * correction);
+                raw[0] *= correction;
+                raw[1] *= correction;
+                raw[2] *= correction;
             }
         }
+
+        // Anchor on corrected green probe
+        float g = std::max(1e-12f, raw[1]);
 
         // 9) Factor is inverse of the print-normalised midgrey green RAW.
         return 1.0f / g;
     }
-
-
 
     inline float interpolate_density_gamma(const Spectral::Curve& dc, float logE, float gammaFactor) {
         if (dc.lambda_nm.empty()) {
