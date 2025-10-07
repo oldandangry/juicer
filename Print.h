@@ -667,14 +667,22 @@ namespace Print {
                 if (x.size() < 2) {
                     return;
                 }
+                const auto [minIt, maxIt] = std::minmax_element(x.begin(), x.end());
+                const float xmin = *minIt;
+                const float xmax = *maxIt;
                 Interpolation::AkimaInterpolator interp;
                 if (!interp.build(x, y)) {
                     return;
                 }
                 for (int i = 0; i < Spectral::gShape.K; ++i) {
                     const float wl = Spectral::gShape.wavelengths[i];
+                    if (wl < xmin || wl > xmax) {
+                        // Parity: agx-emulsion zeroes samples outside the measured range so they contribute no light.
+                        dst.linear[(size_t)i] = 0.0f;
+                        continue;
+                    }
                     const float v = interp.evaluate(wl);
-                    const float normalized = std::isfinite(v) ? (v * 0.01f) : 1.0f;
+                    const float normalized = std::isfinite(v) ? (v * 0.01f) : 0.0f;
                     dst.linear[(size_t)i] = normalized;
                 }
             };
