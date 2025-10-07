@@ -146,7 +146,7 @@ struct ParamSnapshot {
     int printPaperIndex = 0;
     int refIll = 0;
     int viewIll = 0;
-    int enlIll = 2;    
+    int enlIll = 3;    
     int couplersActive = 1;
     int couplersPrecorrect = 1;
     double aR = 0.7, aG = 0.7, aB = 0.5;
@@ -335,9 +335,10 @@ static inline const char* print_json_key_for_paper_index(int paperIndex) {
 static std::vector<std::string> enlarger_illuminant_keys_for_choice(int choice) {
     switch (choice) {
     case 0: return { "D65", "d65" };
-    case 1: return { "D50", "d50" };
-    case 2: return { "TH-KG3-L", "th-kg3-l" };
-    case 3: return { "EqualEnergy", "equal_energy", "Equal energy" };
+    case 1: return { "D55", "d55" };
+    case 2: return { "D50", "d50" };
+    case 3: return { "TH-KG3-L", "th-kg3-l" };
+    case 4: return { "EqualEnergy", "equal_energy", "Equal energy" };
     default: break;
     }
     return {};
@@ -2206,6 +2207,7 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
         OFX::ChoiceParamDescriptor* p = desc.defineChoiceParam("ReferenceIlluminant");
         p->setLabel("Reference illuminant");
         p->appendOption("D65");
+        p->appendOption("D55");
         p->appendOption("D50");
         p->appendOption("TH-KG3-L");
         p->appendOption("Equal energy");
@@ -2216,16 +2218,18 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
         OFX::ChoiceParamDescriptor* p = desc.defineChoiceParam("EnlargerIlluminant");
         p->setLabel("Enlarger illuminant");
         p->appendOption("D65");
+        p->appendOption("D55");
         p->appendOption("D50");
         p->appendOption("TH-KG3-L");
         p->appendOption("Equal energy");
-        p->setDefault(2);
+        p->setDefault(3);
         p->setEvaluateOnChange(true);
     }
     {
         OFX::ChoiceParamDescriptor* p = desc.defineChoiceParam("ViewingIlluminant");
         p->setLabel("Viewing illuminant");
         p->appendOption("D65");
+        p->appendOption("D55");
         p->appendOption("D50");
         p->appendOption("TH-KG3-L");
         p->appendOption("Equal energy");

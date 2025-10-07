@@ -576,7 +576,7 @@ namespace Print {
         out.logEOffY = 0.0f;
     }
 
-    // Build an illuminant pinned to shape from choice. Choices align with your UI (0:D65,1:D50,2:TH-KG3-L,3:Equal)
+    // Build an illuminant pinned to shape from choice. Choices align with your UI (0:D65,1:D55,2:D50,3:TH-KG3-L,4:Equal)
     inline void build_illuminant_from_choice(int choice, Runtime& rt, const std::string& dataDir, bool forEnlarger) {
         // Build pinned curve locally without touching Spectral globals
         Spectral::Curve c;
@@ -584,9 +584,12 @@ namespace Print {
             c = Spectral::build_curve_D65_pinned(dataDir + "Illuminants\\D65.csv");
         }
         else if (choice == 1) {
-            c = Spectral::build_curve_D50_pinned(dataDir + "Illuminants\\D50.csv");
+            c = Spectral::build_curve_D55_pinned(dataDir + "Illuminants\\D55.csv");
         }
         else if (choice == 2) {
+            c = Spectral::build_curve_D50_pinned(dataDir + "Illuminants\\D50.csv");
+        }
+        else if (choice == 3) {
             try {
                 c = Spectral::build_curve_TH_KG3_L_pinned(
                     dataDir + "Filter\\KG3.csv",

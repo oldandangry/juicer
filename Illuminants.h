@@ -166,6 +166,27 @@ namespace Spectral {
         return c;
     }
 
+    inline Spectral::Curve build_curve_D55_pinned(const std::string& csvPath) {
+        Spectral::Curve c;
+        auto pairs = Spectral::load_csv_pairs(csvPath);
+        if (pairs.empty()) {
+            c.lambda_nm = Spectral::gShape.wavelengths;
+            c.linear.assign(Spectral::gShape.K, 1.0f);
+            return c;
+        }
+        auto pinned_pairs = Spectral::resample_pairs_to_shape(pairs, Spectral::gShape);
+        double sum = 0.0;
+        for (auto& p : pinned_pairs) sum += p.second;
+        const double mean = (pinned_pairs.empty() ? 1.0 : sum / pinned_pairs.size());
+        c.lambda_nm = Spectral::gShape.wavelengths;
+        c.linear.resize(Spectral::gShape.K);
+        for (int i = 0; i < Spectral::gShape.K; ++i) {
+            c.linear[i] = (mean > 0.0) ? static_cast<float>(pinned_pairs[i].second / mean)
+                : pinned_pairs[i].second;
+        }
+        return c;
+    }
+
     inline Spectral::Curve build_curve_D50_pinned(const std::string& csvPath) {
         Spectral::Curve c;
         auto pairs = Spectral::load_csv_pairs(csvPath);
@@ -274,6 +295,37 @@ namespace Spectral {
         }
 
         auto pinned_pairs = resample_pairs_to_shape(d65_pairs, gShape);
+
+        // Mean-power normalize
+        double sum = 0.0;
+        for (auto& p : pinned_pairs) sum += p.second;
+        const double mean = pinned_pairs.empty() ? 1.0 : (sum / pinned_pairs.size());
+
+        gIlluminantCurve.lambda_nm = gShape.wavelengths;
+        gIlluminantCurve.linear.resize(gShape.K);
+        for (int i = 0; i < gShape.K; ++i) {
+            gIlluminantCurve.linear[i] = (float)((mean > 0.0) ? (pinned_pairs[i].second / mean) : pinned_pairs[i].second);
+        }
+        ++gIllumVersion;
+        mark_spectral_tables_dirty();
+    }
+
+    inline void set_illuminant_D55(const std::string& csvPath) {
+        std::vector<std::pair<float, float>> d55_pairs;
+        try {
+            d55_pairs = load_csv_pairs(csvPath);
+        }
+        catch (...) {
+            d55_pairs.clear();
+        }
+
+        if (d55_pairs.empty()) {
+            set_illuminant_equal_energy();
+            std::cerr << "[Illuminants] Warning: D55 CSV missing/invalid, using equal-energy fallback.\n";
+            return;
+        }
+
+        auto pinned_pairs = resample_pairs_to_shape(d55_pairs, gShape);
 
         // Mean-power normalize
         double sum = 0.0;
