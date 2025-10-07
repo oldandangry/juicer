@@ -171,6 +171,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="mainProcessing.cpp" />
     <ClCompile Include="NeutralFilters.cpp" />
+    <ClCompile Include="OutputEncoding.cpp" />
     <ClCompile Include="ProfileJSONLoader.cpp" />
     <ClCompile Include="SpectralMathAVX.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
@@ -184,6 +185,7 @@
     <ClInclude Include="mainProcessing.h" />
     <ClInclude Include="NeutralFilters.h" />
     <ClInclude Include="NpyLoader.h" />
+    <ClInclude Include="OutputEncoding.h" />
     <ClInclude Include="Print.h" />
     <ClInclude Include="ProfileJSONLoader.h" />
     <ClInclude Include="Scanner.h" />

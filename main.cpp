@@ -49,6 +49,7 @@
 #include "Scanner.h"
 #include "Print.h"
 #include "WorkingState.h"
+#include "OutputEncoding.h"
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -276,6 +277,10 @@ static bool load_resampled_channel(const std::string& path,
 
 // Print paper parameter
 #define kParamPrintPaper "PrintPaper"
+
+// Output encoding parameters
+#define kParamOutputColorSpace "OutputColorSpace"
+#define kParamOutputCctfEncoding "OutputCctfEncoding"
 
 // Print paper options (folders under Resources/Print)
 static const char* kPrintPaperOptions[] = {
@@ -1339,6 +1344,8 @@ public:
             _pRefIll = fetchChoiceParam("ReferenceIlluminant");
             _pViewIll = fetchChoiceParam("ViewingIlluminant");
             _pEnlIll = fetchChoiceParam("EnlargerIlluminant");
+            _pOutputColorSpace = fetchChoiceParam(kParamOutputColorSpace);
+            _pOutputCctfEncoding = fetchBooleanParam(kParamOutputCctfEncoding);
 
             _pUnmix = fetchBooleanParam("UnmixDensities");
 
@@ -1463,7 +1470,17 @@ public:
             printParams.exposure = static_cast<float>(pexp);
             printParams.preflashExposure = static_cast<float>(preflash);
             printParams.yFilter = static_cast<float>(clampShift(y));
-            printParams.mFilter = static_cast<float>(clampShift(m));            
+            printParams.mFilter = static_cast<float>(clampShift(m));
+        }
+
+        OutputEncoding::Params outputEncodingParams;
+        {
+            int csIndex = OutputEncoding::toIndex(OutputEncoding::ColorSpace::sRGB);
+            if (_pOutputColorSpace) _pOutputColorSpace->getValue(csIndex);
+            bool applyCctf = true;
+            if (_pOutputCctfEncoding) _pOutputCctfEncoding->getValue(applyCctf);
+            outputEncodingParams.colorSpace = OutputEncoding::colorSpaceFromIndex(csIndex);
+            outputEncodingParams.applyCctfEncoding = applyCctf;
         }
 
         // --- Auto exposure compensation (camera) and print exposure compensation ---
@@ -1623,6 +1640,7 @@ public:
         proc.setWorkingState(ws, wsReady);
         proc.setPrintRuntime(prt, printReady);
         proc.setExposure(exposureScale);
+        proc.setOutputEncoding(outputEncodingParams);
         proc.setRenderWindowRect(roi);
         proc.setGPURenderArgs(args);
         // Dispatch to support library's threaded/tiled CPU path
@@ -1650,10 +1668,12 @@ private:
     // Cached params (wrappers)
     OFX::DoubleParam* _pExposure = nullptr;
     OFX::ChoiceParam* _pFilmStock = nullptr;
-    OFX::ChoiceParam* _pPrintPaper = nullptr;    
+    OFX::ChoiceParam* _pPrintPaper = nullptr;
     OFX::ChoiceParam* _pRefIll = nullptr;
     OFX::ChoiceParam* _pViewIll = nullptr;
     OFX::ChoiceParam* _pEnlIll = nullptr;
+    OFX::ChoiceParam* _pOutputColorSpace = nullptr;
+    OFX::BooleanParam* _pOutputCctfEncoding = nullptr;
 
     OFX::BooleanParam* _pUnmix = nullptr;
 
@@ -2197,6 +2217,30 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
         p->appendOption("Equal energy");
         p->setDefault(0);
         p->setEvaluateOnChange(true);
+    }
+
+    // Output encoding group
+    {
+        OFX::GroupParamDescriptor* grpOutput = desc.defineGroupParam("OutputEncodingGroup");
+        if (grpOutput) grpOutput->setLabel("Output encoding");
+
+        {
+            OFX::ChoiceParamDescriptor* p = desc.defineChoiceParam(kParamOutputColorSpace);
+            p->setLabel("Output color space");
+            for (std::size_t i = 0; i < OutputEncoding::kColorSpaceCount; ++i) {
+                p->appendOption(OutputEncoding::kColorSpaceLabels[i]);
+            }
+            p->setDefault(OutputEncoding::toIndex(OutputEncoding::ColorSpace::sRGB));
+            if (grpOutput) p->setParent(*grpOutput);
+            p->setEvaluateOnChange(true);
+        }
+        {
+            OFX::BooleanParamDescriptor* p = desc.defineBooleanParam(kParamOutputCctfEncoding);
+            p->setLabel("Apply output CCTF");
+            p->setDefault(true);
+            if (grpOutput) p->setParent(*grpOutput);
+            p->setEvaluateOnChange(true);
+        }
     }
 }
 

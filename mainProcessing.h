@@ -9,6 +9,7 @@
 #include "Print.h"
 #include "Scanner.h"
 #include "Couplers.h"
+#include "OutputEncoding.h"
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -27,7 +28,8 @@ namespace JuicerProc {
         const Print::Runtime* prt,
         const WorkingState* ws,
         const Couplers::Runtime& dirRT,
-        float exposureScale);
+        float exposureScale,
+        const OutputEncoding::Params& outputEncoding = OutputEncoding::Params{});
 }
 
 
@@ -45,6 +47,7 @@ public:
     void setWorkingState(const WorkingState* ws, bool wsReady);
     void setPrintRuntime(const Print::Runtime* prt, bool printReady);
     void setExposure(float exposureScale);
+    void setOutputEncoding(const OutputEncoding::Params& p);
 
     void multiThreadProcessImages(OfxRectI procWindow) override;
 
@@ -61,7 +64,8 @@ private:
     bool _wsReady;
     bool _printReady;
 
-    float _exposureScale;    
+    float _exposureScale;
+    OutputEncoding::Params _outputEncoding;
 };
 // Test-facing wrappers to access internal spatial utilities without changing production behavior.
 namespace JuicerProcTest {

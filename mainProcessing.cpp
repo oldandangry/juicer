@@ -165,7 +165,8 @@ namespace JuicerProc {
         const Print::Runtime* prt,
         const WorkingState* ws,
         const Couplers::Runtime& dirRT,
-        float exposureScale)
+        float exposureScale,
+        const OutputEncoding::Params& outputEncoding)
     {
         if (!src || !outRGB || outW <= 0 || outH <= 0 || !prt || !ws) return;
 
@@ -206,6 +207,7 @@ namespace JuicerProc {
                     kMid_spectral,
                     rgbOut);
 
+                OutputEncoding::applyEncoding(outputEncoding, rgbOut);
                 dstPix[0] = rgbOut[0];
                 dstPix[1] = rgbOut[1];
                 dstPix[2] = rgbOut[2];
@@ -224,7 +226,8 @@ JuicerProcessor::JuicerProcessor(OFX::ImageEffect& effect)
     , _ws(nullptr)
     , _wsReady(false)
     , _printReady(false)
-    , _exposureScale(1.0f)    
+    , _exposureScale(1.0f)
+    , _outputEncoding{}
 {
 }
 
@@ -251,6 +254,10 @@ void JuicerProcessor::setWorkingState(const WorkingState* ws, bool wsReady) {
 void JuicerProcessor::setPrintRuntime(const Print::Runtime* prt, bool printReady) { _prt = prt; _printReady = printReady; }
 void JuicerProcessor::setExposure(float exposureScale) {
     _exposureScale = exposureScale;
+}
+
+void JuicerProcessor::setOutputEncoding(const OutputEncoding::Params& p) {
+    _outputEncoding = p;
 }
 
 void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
@@ -447,6 +454,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     const int K = std::min(_ws->tablesView.K, _ws->tablesPrint.K);
                     if (K <= 0) {
                         // Defensive early-out: cannot proceed with spectral integration
+                        OutputEncoding::applyEncoding(_outputEncoding, rgbOut);
                         dstPix[0] = rgbOut[0];
                         dstPix[1] = rgbOut[1];
                         dstPix[2] = rgbOut[2];
@@ -527,6 +535,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 }
 
                 // Write out (no pointer increments)
+                OutputEncoding::applyEncoding(_outputEncoding, rgbOut);
                 dstPix[0] = rgbOut[0];
                 dstPix[1] = rgbOut[1];
                 dstPix[2] = rgbOut[2];
@@ -574,6 +583,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     }
                 }
 
+                OutputEncoding::applyEncoding(_outputEncoding, rgbOut);
                 dstPix[0] = rgbOut[0];
                 dstPix[1] = rgbOut[1];
                 dstPix[2] = rgbOut[2];
