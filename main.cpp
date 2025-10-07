@@ -295,16 +295,32 @@ static inline std::string print_dir_for_index(int index) {
     return gDataDir + std::string("Print\\") + kPrintPaperOptions[index] + "\\";
 }
 
+struct FilmStockDefinition {
+    const char* optionLabel;
+    const char* folderName;
+    const char* jsonKey;
+};
+
+static constexpr FilmStockDefinition kFilmStocks[] = {
+    { "Vision3 250D", "Vision3 250D", "kodak_vision3_250d_uc" },
+    { "Vision3 50D",  "Vision3 50D",  "kodak_vision3_50d_uc" },
+    { "Vision3 200T", "Vision3 200T", "kodak_vision3_200t_uc" },
+    { "Vision3 500T", "Vision3 500T", "kodak_vision3_500t_uc" },
+    { "Portra 400",   "Portra_400",   "kodak_portra_400_auc" }
+};
+
+static constexpr int kNumFilmStocks = sizeof(kFilmStocks) / sizeof(kFilmStocks[0]);
+
+static inline const FilmStockDefinition& film_stock_for_index(int filmIndex) {
+    if (filmIndex < 0 || filmIndex >= kNumFilmStocks) {
+        filmIndex = 0;
+    }
+    return kFilmStocks[filmIndex];
+}
+
 // Map our film stock options to agx JSON keys
 static inline const char* negative_json_key_for_stock_index(int filmIndex) {
-    // kFilmStockOptions: "Vision3 250D", "Vision3 50D", "Vision3 200T", "Vision3 500T"
-    switch (filmIndex) {
-    case 0: return "kodak_vision3_250d_uc";
-    case 1: return "kodak_vision3_50d_uc";
-    case 2: return "kodak_vision3_200t_uc";
-    case 3: return "kodak_vision3_500t_uc";
-    default: return "kodak_vision3_250d_uc";
-    }
+    return film_stock_for_index(filmIndex).jsonKey;
 }
 
 // Map print paper selection to agx JSON paper keys
@@ -327,19 +343,10 @@ static std::vector<std::string> enlarger_illuminant_keys_for_choice(int choice) 
     return {};
 }
 
-// Film stock folder names (must match folder names under Resources/Stock)
-static const char* kFilmStockOptions[] = {
-    "Vision3 250D",
-    "Vision3 50D",
-    "Vision3 200T",
-    "Vision3 500T"
-};
-static constexpr int kNumFilmStocks = sizeof(kFilmStockOptions) / sizeof(kFilmStockOptions[0]);
-
 // Resolve stock index -> folder path under Resources/Stock
 static std::string stock_dir_for_index(int index) {
-    if (index < 0 || index >= kNumFilmStocks) index = 0; // default to 250D
-    return gDataDir + std::string("Stock\\") + kFilmStockOptions[index] + "\\";
+    const FilmStockDefinition& stock = film_stock_for_index(index);
+    return gDataDir + std::string("Stock\\") + stock.folderName + "\\";
 }
 
 static std::string last_path_segment(const std::string& path) {
@@ -377,10 +384,11 @@ static std::string sanitize_densitometer_type(const std::string& type) {
 }
 
 static const char* film_json_key_for_folder(const std::string& folder) {
-    if (folder == "Vision3 250D") return "kodak_vision3_250d_uc";
-    if (folder == "Vision3 50D") return "kodak_vision3_50d_uc";
-    if (folder == "Vision3 200T") return "kodak_vision3_200t_uc";
-    if (folder == "Vision3 500T") return "kodak_vision3_500t_uc";
+    for (const FilmStockDefinition& stock : kFilmStocks) {
+        if (folder == stock.folderName) {
+            return stock.jsonKey;
+        }
+    }
     return nullptr;
 }
 
@@ -2028,7 +2036,7 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
     {
         OFX::ChoiceParamDescriptor* p = desc.defineChoiceParam(kParamFilmStock);
         p->setLabel("Film stock");
-        for (int i = 0; i < kNumFilmStocks; ++i) p->appendOption(kFilmStockOptions[i]);
+        for (int i = 0; i < kNumFilmStocks; ++i) p->appendOption(kFilmStocks[i].optionLabel);
         p->setDefault(0);
         p->setEvaluateOnChange(true);
     }
