@@ -14,6 +14,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Core>
 #include "SpectralTables.h"
+#include <mutex>
 
 // Forward declaration to avoid circular dependency with WorkingState.h
 struct SpectralTables;
@@ -1585,7 +1586,8 @@ namespace Spectral {
     };
 
     // Default prototype negative (placeholder values; tune later)
-    inline NegativeCouplerParams gNegParams = {
+    inline NegativeCouplerParams make_default_neg_params() {
+        return {
         // Dmax per dye (kept conservative for now)
         1.10f, 1.00f, 1.30f,
         // Base mask densities (preserve your current baseline look)
@@ -1596,7 +1598,21 @@ namespace Spectral {
          0.98f, -0.06f, -0.02f,
         -0.03f,  0.98f, -0.05f,
         -0.02f, -0.04f,  0.98f
-    };
+        };
+    }
+
+    inline std::mutex gNegParamsMutex;
+    inline NegativeCouplerParams gNegParams = make_default_neg_params();
+
+    inline void set_neg_params(const NegativeCouplerParams& params) {
+        std::lock_guard<std::mutex> lock(gNegParamsMutex);
+        gNegParams = params;
+    }
+
+    inline NegativeCouplerParams get_neg_params() {
+        std::lock_guard<std::mutex> lock(gNegParamsMutex);
+        return gNegParams;
+    }
 
     // Simple H-D-like curve: monotonic, saturating, smooth
     inline float hd_curve(float E, float Dmax, float k) {
@@ -2066,21 +2082,26 @@ namespace Spectral {
     // 1) H-D curve per layer: Y<-B, M<-G, C<-R
     // 2) Apply masking matrix
     // 3) Add base densities
+    inline void exposures_to_dyes_with_params(const float E[3], float D[3], const NegativeCouplerParams& negParams) {
+        D[0] = std::max(0.0f, hd_curve(E[0], negParams.DmaxY, negParams.kB)); // Y <- B
+        D[1] = std::max(0.0f, hd_curve(E[1], negParams.DmaxM, negParams.kG)); // M <- G
+        D[2] = std::max(0.0f, hd_curve(E[2], negParams.DmaxC, negParams.kR)); // C <- R
+    }
     inline void exposures_to_dyes(const float E[3], float D[3]) {
-        D[0] = std::max(0.0f, hd_curve(E[0], gNegParams.DmaxY, gNegParams.kB)); // Y <- B
-        D[1] = std::max(0.0f, hd_curve(E[1], gNegParams.DmaxM, gNegParams.kG)); // M <- G
-        D[2] = std::max(0.0f, hd_curve(E[2], gNegParams.DmaxC, gNegParams.kR)); // C <- R
+        const NegativeCouplerParams negParams = get_neg_params();
+        exposures_to_dyes_with_params(E, D, negParams);
     }
 
     // -------------------------------------------------------------------------
     // Masking coupler matrix 
     // -------------------------------------------------------------------------
     inline void applyMaskingCoupler(const float E[3], float D[3]) {        
-        exposures_to_dyes(E, D);
-        const float* M = gNegParams.mask;
-        const float y = M[0] * D[0] + M[1] * D[1] + M[2] * D[2] + gNegParams.baseY;
-        const float m = M[3] * D[0] + M[4] * D[1] + M[5] * D[2] + gNegParams.baseM;
-        const float c = M[6] * D[0] + M[7] * D[1] + M[8] * D[2] + gNegParams.baseC;
+        const NegativeCouplerParams negParams = get_neg_params();
+        exposures_to_dyes_with_params(E, D, negParams);
+        const float* M = negParams.mask;
+        const float y = M[0] * D[0] + M[1] * D[1] + M[2] * D[2] + negParams.baseY;
+        const float m = M[3] * D[0] + M[4] * D[1] + M[5] * D[2] + negParams.baseM;
+        const float c = M[6] * D[0] + M[7] * D[1] + M[8] * D[2] + negParams.baseC;
         D[0] = std::max(0.0f, y);
         D[1] = std::max(0.0f, m);
         D[2] = std::max(0.0f, c);

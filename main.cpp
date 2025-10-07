@@ -1304,7 +1304,7 @@ static void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& 
         }
     }
 
-    Spectral::gNegParams = target->negParams;
+    Spectral::set_neg_params(target->negParams);
 
     // Publish DIR runtime snapshot for global spectral helpers (negative preview path).
     {
