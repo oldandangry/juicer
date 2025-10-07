@@ -12,6 +12,7 @@ namespace OutputEncoding {
         ITU_R_BT2020,
         ProPhotoRGB,
         ACES2065_1,
+        DaVinciWideGamutIntermediate,
         Count
     };
 
@@ -28,7 +29,8 @@ namespace OutputEncoding {
         "Adobe RGB (1998)",
         "ITU-R BT.2020",
         "ProPhoto RGB",
-        "ACES2065-1"
+        "ACES2065-1",
+        "DaVinci Wide Gamut Intermediate"
     };
 
     inline constexpr std::size_t kColorSpaceCount = static_cast<std::size_t>(ColorSpace::Count);

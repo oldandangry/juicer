@@ -41,10 +41,46 @@ namespace OutputEncoding {
             return clamp01(encoded);
         }
 
+        inline float encode_DaVinciIntermediate(float v) {
+            if (!std::isfinite(v)) {
+                return 0.0f;
+            }
+
+            constexpr float kDI_A = 0.0075f;
+            constexpr float kDI_B = 7.0f;
+            constexpr float kDI_C = 0.07329248f;
+            constexpr float kDI_M = 10.44426855f;
+            constexpr float kDI_LIN_CUT = 0.00262409f;
+
+            const float linear = std::max(0.0f, v);
+            if (linear <= kDI_LIN_CUT) {
+                return clamp01(linear * kDI_M);
+            }
+
+            const float encoded = (static_cast<float>(std::log2(linear + kDI_A)) + kDI_B) * kDI_C;
+            return clamp01(encoded);
+        }
+
+        inline float applyEncodingChannel(ColorSpace cs, float v) {
+            switch (cs) {
+            case ColorSpace::sRGB:
+                return encode_sRGB(v);
+            case ColorSpace::DaVinciWideGamutIntermediate:
+                return encode_DaVinciIntermediate(v);
+            default:
+                return clamp01(v);
+            }
+        }
+
         void convertFromDWG(ColorSpace cs, const float in[3], float out[3]) {
             switch (cs) {
             case ColorSpace::sRGB:
                 kDWG_to_sRGB.mul(in, out);
+                break;
+            case ColorSpace::DaVinciWideGamutIntermediate:
+                out[0] = in[0];
+                out[1] = in[1];
+                out[2] = in[2];
                 break;
             default:
                 out[0] = in[0];
@@ -57,6 +93,7 @@ namespace OutputEncoding {
         bool hasEncoding(ColorSpace cs) {
             switch (cs) {
             case ColorSpace::sRGB:
+            case ColorSpace::DaVinciWideGamutIntermediate:
                 return true;
             default:
                 return false;
@@ -76,9 +113,9 @@ namespace OutputEncoding {
         }
 
         if (params.applyCctfEncoding && hasEncoding(params.colorSpace)) {
-            rgb[0] = encode_sRGB(converted[0]);
-            rgb[1] = encode_sRGB(converted[1]);
-            rgb[2] = encode_sRGB(converted[2]);
+            rgb[0] = applyEncodingChannel(params.colorSpace, converted[0]);
+            rgb[1] = applyEncodingChannel(params.colorSpace, converted[1]);
+            rgb[2] = applyEncodingChannel(params.colorSpace, converted[2]);
         }
         else {
             rgb[0] = clamp01(converted[0]);
