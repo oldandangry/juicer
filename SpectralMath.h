@@ -37,8 +37,9 @@ namespace Spectral {
     // SpectralMath.h (near the top, inside namespace Spectral, before any use)
     struct BaselineCtx {
         bool hasBaseline;
-        const float* base;
-        float scale;
+        const float* baseMin;
+        const float* baseMid;
+        float mix;
     };
 
 #if defined(__AVX2__)
@@ -1718,8 +1719,9 @@ namespace Spectral {
     inline void dyes_to_XYZ_given_Ee(const float* dyes, float XYZ[3]) {
         BaselineCtx base;
         base.hasBaseline = false;
-        base.base = nullptr;
-        base.scale = 0.0f;
+        base.baseMin = nullptr;
+        base.baseMid = nullptr;
+        base.mix = 0.0f;
 
 #if defined(__AVX2__)
         integrate_dyes_to_XYZ_avx2(
@@ -1748,10 +1750,18 @@ namespace Spectral {
 
 
     inline void dyes_to_XYZ_given_Ee_with_baseline(const float* dyes, float neutralW, float XYZ[3]) {
+        const float mix = std::clamp(neutralW, 0.0f, 1.0f);
         BaselineCtx base;
-        base.hasBaseline = gHasBaseline;
-        base.base = gBaselineMinTable.data();
-        base.scale = 1.0f;
+        const bool tablesReady =
+            !gBaselineMinTable.empty() &&
+            !gBaselineMidTable.empty() &&
+            gBaselineMinTable.size() == static_cast<size_t>(gShape.K) &&
+            gBaselineMidTable.size() == static_cast<size_t>(gShape.K);
+
+        base.hasBaseline = gHasBaseline && tablesReady;
+        base.baseMin = tablesReady ? gBaselineMinTable.data() : nullptr;
+        base.baseMid = tablesReady ? gBaselineMidTable.data() : nullptr;
+        base.mix = mix;
 
 #if defined(__AVX2__)
         integrate_dyes_to_XYZ_avx2(
@@ -1763,9 +1773,12 @@ namespace Spectral {
         double X = 0.0, Y = 0.0, Z = 0.0;
         const int K = gShape.K;
         for (int i = 0; i < K; ++i) {
-            const float baseSpectral = (base.hasBaseline && base.base)
-                ? (base.scale * base.base[i])
-                : 0.0f;
+            float baseSpectral = 0.0f;
+            if (base.hasBaseline && base.baseMin && base.baseMid) {
+                const float minV = base.baseMin[i];
+                const float midV = base.baseMid[i];
+                baseSpectral = minV + base.mix * (midV - minV);
+            }
 
             const float Dlambda = dyes[0] * gEpsYTable[i]
                 + dyes[1] * gEpsMTable[i]

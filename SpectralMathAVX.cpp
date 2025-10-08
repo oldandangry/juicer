@@ -72,10 +72,12 @@ namespace Spectral {
 
             __m256 Dlambda = _mm256_fmadd_ps(dYv, eY, _mm256_fmadd_ps(dMv, eM, _mm256_mul_ps(dCv, eC)));
 
-            if (base.hasBaseline && base.base) {
-                __m256 b = _mm256_loadu_ps(base.base + i);
-                __m256 scale = _mm256_set1_ps(base.scale);
-                __m256 dBase = _mm256_mul_ps(scale, b);
+            if (base.hasBaseline && base.baseMin && base.baseMid) {
+                __m256 bMin = _mm256_loadu_ps(base.baseMin + i);
+                __m256 bMid = _mm256_loadu_ps(base.baseMid + i);
+                __m256 mix = _mm256_set1_ps(base.mix);
+                __m256 delta = _mm256_sub_ps(bMid, bMin);
+                __m256 dBase = _mm256_fmadd_ps(delta, mix, bMin);
 
                 Dlambda = _mm256_add_ps(Dlambda, dBase);
             }
@@ -97,8 +99,10 @@ namespace Spectral {
 
         for (; i < K; ++i) {
             float Dlambda = dY * epsY[i] + dM * epsM[i] + dC * epsC[i];
-            if (base.hasBaseline && base.base) {
-                Dlambda += base.scale * base.base[i];
+            if (base.hasBaseline && base.baseMin && base.baseMid) {
+                const float minV = base.baseMin[i];
+                const float midV = base.baseMid[i];
+                Dlambda += minV + base.mix * (midV - minV);;
             }
             float T = std::exp(-kLn10 * Dlambda);
             X += T * Ax[i];
