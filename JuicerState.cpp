@@ -147,7 +147,7 @@ std::string print_dir_for_index(int index) {
 
 std::string stock_dir_for_index(int index) {
     const FilmStockDefinition& stock = film_stock_for_index(index);
-    return gDataDir + std::string("Stock\\") + stock.folderName + "\\";
+    return gDataDir + std::string("profiles\\") + stock.folderName + "\\";
 }
 
 const char* negative_json_key_for_stock_index(int filmIndex) {
