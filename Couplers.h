@@ -30,7 +30,7 @@ namespace Couplers {
     // IMPORTANT: keep the exact same signature as enabled build
     inline void maybe_precorrect_curves(OfxImageEffectHandle, OfxImageEffectSuiteV1*, OfxParameterSuiteV1*) {}
 
-    inline void fetch_runtime(const OfxImageEffectHandle, OfxImageEffectSuiteV1*, OfxParameterSuiteV1*, Runtime&) {}
+    inline void fetch_runtime(const OfxImageEffectHandle, OfxImageEffectSuiteV1*, OfxPropertySuiteV1*, OfxParameterSuiteV1*, Runtime&) {}
     inline void apply_runtime(ApplyInput&, const Runtime&) {}
 
     // Optional parity helpers used by the print/scanner paths
@@ -433,6 +433,7 @@ namespace Couplers {
 
     inline void fetch_runtime(const OfxImageEffectHandle instance,
         OfxImageEffectSuiteV1* effectSuite,
+        OfxPropertySuiteV1* propSuite,
         OfxParameterSuiteV1* paramSuite,
         Runtime& rt) {
         // Defaults
