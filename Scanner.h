@@ -85,9 +85,9 @@ namespace Scanner {
 
         // Per-instance logE offsets (no globals)
         float logE[3] = {
-            std::log10(std::max(E[0], 1e-6f)) + ws.logEOffB,
-            std::log10(std::max(E[1], 1e-6f)) + ws.logEOffG,
-            std::log10(std::max(E[2], 1e-6f)) + ws.logEOffR
+            std::log10(std::max(0.0f, E[0]) + 1e-10f) + ws.logEOffB,
+            std::log10(std::max(0.0f, E[1]) + 1e-10f) + ws.logEOffG,
+            std::log10(std::max(0.0f, E[2]) + 1e-10f) + ws.logEOffR
         };
 
         // Domain clamp helper before sampling
@@ -199,9 +199,9 @@ namespace Scanner {
                     sensB_forExposure, sensG_forExposure, sensR_forExposure);
 
                 float logERef[3] = {
-                    std::log10(std::max(Eref[0], 1e-6f)) + ws.logEOffB,
-                    std::log10(std::max(Eref[1], 1e-6f)) + ws.logEOffG,
-                    std::log10(std::max(Eref[2], 1e-6f)) + ws.logEOffR
+                    std::log10(std::max(0.0f, Eref[0]) + 1e-10f) + ws.logEOffB,
+                    std::log10(std::max(0.0f, Eref[1]) + 1e-10f) + ws.logEOffG,
+                    std::log10(std::max(0.0f, Eref[2]) + 1e-10f) + ws.logEOffR
                 };
 
                 float logERefClamped[3] = {

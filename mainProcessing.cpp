@@ -314,9 +314,9 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     if (sExp != 1.0f) { E[0] *= sExp; E[1] *= sExp; E[2] *= sExp; }
                 }
 
-                float leB = std::log10(std::max(E[0], 1e-6f)) + _ws->logEOffB;
-                float leG = std::log10(std::max(E[1], 1e-6f)) + _ws->logEOffG;
-                float leR = std::log10(std::max(E[2], 1e-6f)) + _ws->logEOffR;
+                float leB = std::log10(std::max(0.0f, E[0]) + 1e-10f) + _ws->logEOffB;
+                float leG = std::log10(std::max(0.0f, E[1]) + 1e-10f) + _ws->logEOffG;
+                float leR = std::log10(std::max(0.0f, E[2]) + 1e-10f) + _ws->logEOffR;
 
                 auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
                     if (c.lambda_nm.empty()) return le;
