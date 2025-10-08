@@ -226,6 +226,15 @@ bool load_film_stock_into_base(const std::string& stockDir, InstanceState& S) {
     S.base.dirCouplers = profile.dirCouplers;
     S.base.maskingCouplers = profile.maskingCouplers;
     JTRACE("STOCK", std::string("loaded agx profile json: ") + jsonKey);
+    if (!dc_r.empty() && !dc_g.empty() && !dc_b.empty()) {
+        std::ostringstream oss;
+        oss << "density curves loaded from JSON '" << jsonKey << "' samples R/G/B="
+            << dc_r.size() << "/" << dc_g.size() << "/" << dc_b.size();
+        JTRACE("STOCK", oss.str());
+    }
+    else {
+        JTRACE("STOCK", std::string("density curves missing in JSON profile: ") + jsonKey);
+    }
 
     {
         auto sz = [](const auto& v) { return static_cast<int>(v.size()); };
@@ -253,6 +262,7 @@ bool load_film_stock_into_base(const std::string& stockDir, InstanceState& S) {
         !dc_r.empty() && !dc_g.empty() && !dc_b.empty();
     if (!okCore) {
         JTRACE("STOCK", "okCore=false (required assets missing)");
+        JTRACE("STOCK", "film stock load aborted due to missing JSON density curves");
         return false;
     }
 

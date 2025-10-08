@@ -79,9 +79,8 @@ namespace Spectral {
     inline DirRuntimeSnapshot gDirRuntimeSnapshot{};
     inline void set_dir_runtime_snapshot(const DirRuntimeSnapshot&) {}
     inline DirRuntimeSnapshot get_dir_runtime_snapshot() { return gDirRuntimeSnapshot; }
-#endif
+#endif   
     
-    inline void apply_dir_couplers(float D[3], const float E_in[3]);
 
     // Mark tables dirty (call when any spectral input that affects tables changes)
     inline void mark_spectral_tables_dirty() {
@@ -349,19 +348,7 @@ namespace Spectral {
 
     // --- Per-layer density curves (log10 relative exposure → density) ---
     inline Curve gDensityCurveB, gDensityCurveG, gDensityCurveR;
-
-    // Global offset to shift logE domain when sampling density curves
-    // (~0.3 ≈ 1 stop shift to the right)
-    inline float gDensityCurveLogEOffset = 0.0f;
-    inline float gDensityCurveLogEOffsetB = 0.0f;
-    inline float gDensityCurveLogEOffsetG = 0.0f;
-    inline float gDensityCurveLogEOffsetR = 0.0f;
-
-    inline void set_density_curve_logE_offset(float offset) {
-        gDensityCurveLogEOffset = offset;
-    }
-
-    // Helper: sort pairs by x, build curve
+        
     inline void sort_and_build(Curve& curve, const std::vector<std::pair<float, float>>& pairs) {
         if (pairs.empty()) {
             curve.lambda_nm.clear();
@@ -381,108 +368,6 @@ namespace Spectral {
             curve.linear.push_back(std::max(0.0f, p.second));
         }
     }
-
-    // Helper: find logE at mid-density
-    inline float find_mid_gray_logE(const Curve& c) {
-        if (c.lambda_nm.empty()) return 0.0f;
-        float dmin = c.linear.front();
-        float dmax = c.linear.back();
-        float target = dmin + 0.5f * (dmax - dmin);
-        // Linear search for segment containing target
-        for (size_t i = 1; i < c.lambda_nm.size(); ++i) {
-            float y0 = c.linear[i - 1], y1 = c.linear[i];
-            if ((y0 <= target && target <= y1) || (y1 <= target && target <= y0)) {
-                float x0 = c.lambda_nm[i - 1], x1 = c.lambda_nm[i];
-                float t = (target - y0) / (y1 - y0);
-                return x0 + t * (x1 - x0);
-            }
-        }
-        return c.lambda_nm.front();
-    }
-
-    inline float gMidB = 0.0f;
-    inline float gMidG = 0.0f;
-    inline float gMidR = 0.0f;
-
-    inline void set_density_curves(
-        const std::vector<std::pair<float, float>>& b_pairs,
-        const std::vector<std::pair<float, float>>& g_pairs,
-        const std::vector<std::pair<float, float>>& r_pairs)
-    {
-        sort_and_build(gDensityCurveB, b_pairs);
-        sort_and_build(gDensityCurveG, g_pairs);
-        sort_and_build(gDensityCurveR, r_pairs);
-
-        // Store mid-gray logE for each layer
-        gMidB = find_mid_gray_logE(gDensityCurveB);
-        gMidG = find_mid_gray_logE(gDensityCurveG);
-        gMidR = find_mid_gray_logE(gDensityCurveR);
-    }
-
-    // Align red/blue density curves to green at logE = 0 (agx balance_density-like)
-    // Shifts R and B curves along logE so that their densities at logE=0 match green's density at logE=0.
-    // Assumes curve.lambda_nm holds logE domain and curve.linear holds densities.
-    inline void balance_density_curves_to_green_zero() {
-        // Require curves to exist
-        if (gDensityCurveG.lambda_nm.empty() ||
-            gDensityCurveR.lambda_nm.empty() ||
-            gDensityCurveB.lambda_nm.empty())
-            return;
-
-        auto interp_density = [](const Curve& c, float x) -> float {
-            if (c.lambda_nm.empty()) return 0.0f;
-            // Sample using the same linear interpolation as Curve::sample,
-            // but the x-domain is logE (stored in lambda_nm)
-            const size_t n = c.lambda_nm.size();
-            if (x <= c.lambda_nm.front()) return c.linear.front();
-            if (x >= c.lambda_nm.back())  return c.linear.back();
-            size_t i1 = 1;
-            while (i1 < n && c.lambda_nm[i1] < x) ++i1;
-            const size_t i0 = i1 - 1;
-            const float x0 = c.lambda_nm[i0], x1 = c.lambda_nm[i1];
-            const float y0 = c.linear[i0], y1 = c.linear[i1];
-            const float t = (x - x0) / (x1 - x0);
-            return y0 + t * (y1 - y0);
-            };
-
-        auto find_logE_for_density = [](const Curve& c, float targetY) -> float {
-            if (c.lambda_nm.empty()) return 0.0f;
-            const size_t n = c.lambda_nm.size();
-            for (size_t i = 1; i < n; ++i) {
-                const float x0 = c.lambda_nm[i - 1], x1 = c.lambda_nm[i];
-                const float y0 = c.linear[i - 1], y1 = c.linear[i];
-                // check segment contains target
-                if ((y0 <= targetY && targetY <= y1) || (y1 <= targetY && targetY <= y0)) {
-                    const float t = (y1 != y0) ? (targetY - y0) / (y1 - y0) : 0.0f;
-                    return x0 + t * (x1 - x0);
-                }
-            }
-            // Fallback to closest end
-            return c.lambda_nm.front();
-            };
-
-        // Target is green density at logE = 0
-        const float targetG = interp_density(gDensityCurveG, 0.0f);
-
-        // Compute shifts for R and B so that density(logE + shift) == targetG at logE == 0 => find x such that c(x) = targetG
-        const float shiftR = -find_logE_for_density(gDensityCurveR, targetG);
-        const float shiftB = -find_logE_for_density(gDensityCurveB, targetG);
-
-        auto shift_curve_in_x = [](Curve& c, float dx) {
-            if (c.lambda_nm.empty() || dx == 0.0f) return;
-            for (auto& x : c.lambda_nm) x += dx;
-            };
-
-        shift_curve_in_x(gDensityCurveR, shiftR);
-        shift_curve_in_x(gDensityCurveB, shiftB);
-
-        // Recompute mids for diagnostics if needed
-        gMidR = find_mid_gray_logE(gDensityCurveR);
-        gMidB = find_mid_gray_logE(gDensityCurveB);
-
-        mark_mixing_dirty();
-    }
-
 
     inline void mean_power_normalize(std::vector<float>& spd) {
         if (spd.empty()) return;
@@ -1692,76 +1577,7 @@ namespace Spectral {
             reconstruct_Ee_from_DWG_RGB(rgbDWG, Ee_scene);
         }
         layerExposures_from_sceneSPD(Ee_scene, E, exposureScale);        
-    }
-
-    // Density curves from agx-emulsion's csv data.
-
-    inline void density_curve_rgb_dwg(
-        const float rgbDWG[3],
-        float exposureScale,
-        float D_out[3],
-        float D_hd_nomask_out[3] = nullptr)
-
-    {
-        // 1) DWG -> layer exposures via selected method (matrix vs SPD)
-        //    SPD path integrates reconstructed SPD with measured sensitivities.
-        float E[3];
-        rgbDWG_to_layerExposures_flex(rgbDWG, E, exposureScale);
-
-
-        // 3) H-D curves from CSVs (no masking/base yet): Y<-B, M<-G, C<-R
-        auto eval_density_curve = [](const Curve& curve, float exposure, float offset) -> float {
-            if (curve.lambda_nm.empty()) {
-                // Fallback to old hd_curve if no CSV loaded
-                return hd_curve(exposure, 1.0f, 6.0f);
-            }
-            exposure = std::max(exposure, 1e-6f); // avoid log of zero
-            float logE = std::log10(exposure) + offset;
-            return curve.sample(logE);
-            };
-
-        // Apply per-layer offsets; these densities are “over B+F” (do NOT add base here)
-        const float dY0 = eval_density_curve(gDensityCurveB, E[0], gDensityCurveLogEOffsetB); // Blue layer → Yellow dye
-        const float dM0 = eval_density_curve(gDensityCurveG, E[1], gDensityCurveLogEOffsetG); // Green layer → Magenta dye
-        const float dC0 = eval_density_curve(gDensityCurveR, E[2], gDensityCurveLogEOffsetR); // Red layer → Cyan dye
-
-#ifdef JUICER_ENABLE_COUPLERS
-        // Non-spatial DIR: adjust E using dY0,dM0,dC0 then re-evaluate densities
-        
-        // Fetching runtime params requires the instance; we do that in juicer-001 during render.
-        // Here we just expose the container type; a helper in render will perform apply_runtime.
-        // So do nothing here; actual scaling will be done in juicer-001 before calling this function when enabled.
-#endif
-        
-        if (D_hd_nomask_out) {
-            D_hd_nomask_out[0] = dY0;
-            D_hd_nomask_out[1] = dM0;
-            D_hd_nomask_out[2] = dC0;
-        }
-
-        // Apply DIR couplers (default no‑op); keep over‑B+F semantics
-        float D_tmp[3] = { dY0, dM0, dC0 };
-        apply_dir_couplers(D_tmp, E);
-
-        D_out[0] = D_tmp[0];
-        D_out[1] = D_tmp[1];
-        D_out[2] = D_tmp[2];
-    }
-
-    inline void density_curve_from_exposures(const float E[3], float D_out[3]) {
-        auto eval = [](const Curve& c, float e, float off) {
-            if (c.lambda_nm.empty()) return hd_curve(e, 1.0f, 6.0f);
-            e = std::max(e, 1e-6f);
-            float logE = std::log10(e) + off;
-            return c.sample(logE);
-            };
-        D_out[0] = eval(gDensityCurveB, E[0], gDensityCurveLogEOffsetB); // Yellow
-        D_out[1] = eval(gDensityCurveG, E[1], gDensityCurveLogEOffsetG); // Magenta
-        D_out[2] = eval(gDensityCurveR, E[2], gDensityCurveLogEOffsetR); // Cyan
-    }
-
-    // LogE-domain density sampling helpers (agx DIR parity) ===
-    // Insert below density_curve_from_exposures(...) in Spectral namespace.
+    }    
 
     inline float sample_density_at_logE(const Curve& c, float logE) {
         const size_t n = c.lambda_nm.size();
@@ -1778,205 +1594,7 @@ namespace Spectral {
         const float y0 = c.linear[i0], y1 = c.linear[i1];
         const float t = (logE - x0) / (x1 - x0);
         return y0 + t * (y1 - y0);
-    }
-
-    inline void apply_dir_couplers(float D[3], const float E_in[3]) {
-#ifdef JUICER_ENABLE_COUPLERS
-        const DirRuntimeSnapshot rt = get_dir_runtime_snapshot();
-        if (!rt.active) {
-            return;
-        }
-
-        // Require valid density curves and normalization constants.
-        if (gDensityCurveB.lambda_nm.empty() || gDensityCurveG.lambda_nm.empty() || gDensityCurveR.lambda_nm.empty()) {
-            return;
-        }
-
-        auto clamp_to_curve = [](float le, const Curve& c) -> float {
-            if (c.lambda_nm.empty()) return le;
-            const float xmin = c.lambda_nm.front();
-            const float xmax = c.lambda_nm.back();
-            if (!std::isfinite(le)) return xmin;
-            if (le < xmin) return xmin;
-            if (le > xmax) return xmax;
-            return le;
-            };
-
-        auto safe_norm = [](float val, float maxVal) -> float {
-            float m = (std::isfinite(maxVal) && maxVal > 1e-4f) ? maxVal : 1.0f;
-            float v = (!std::isfinite(val) || val < 0.0f) ? 0.0f : val;
-            float n = v / m;
-            if (!std::isfinite(n)) n = 0.0f;
-            if (n < 0.0f) n = 0.0f;
-            if (n > 1.0f) n = 1.0f;
-            return n;
-            };
-
-        auto high_boost = [&](float n) -> float {
-            n = std::clamp(n, 0.0f, 1.0f);
-            float boosted = n + rt.highShift * n * n;
-            if (!std::isfinite(boosted)) boosted = n;
-            return std::clamp(boosted, 0.0f, 1.0f);
-            };
-
-        auto clamp_corr = [](float v) -> float {
-            if (!std::isfinite(v)) return 0.0f;
-            if (v < -10.0f) return -10.0f;
-            if (v > 10.0f) return 10.0f;
-            return v;
-            };
-
-        const float logEOffsets[3] = {
-            gDensityCurveLogEOffsetB,
-            gDensityCurveLogEOffsetG,
-            gDensityCurveLogEOffsetR
-        };
-
-        float logE_raw[3];
-        for (int i = 0; i < 3; ++i) {
-            const float Ein = E_in[i];
-            const float safeE = (std::isfinite(Ein) && Ein > 0.0f) ? Ein : 1e-6f;
-            logE_raw[i] = std::log10(std::max(safeE, 1e-6f)) + logEOffsets[i];
-        }
-
-        float logE_clamped[3] = {
-            clamp_to_curve(logE_raw[0], gDensityCurveB),
-            clamp_to_curve(logE_raw[1], gDensityCurveG),
-            clamp_to_curve(logE_raw[2], gDensityCurveR)
-        };
-
-        float D_sampled[3] = {
-            sample_density_at_logE(gDensityCurveB, logE_clamped[0]),
-            sample_density_at_logE(gDensityCurveG, logE_clamped[1]),
-            sample_density_at_logE(gDensityCurveR, logE_clamped[2])
-        };
-
-        float nB = high_boost(safe_norm(D_sampled[0], rt.dMax[0]));
-        float nG = high_boost(safe_norm(D_sampled[1], rt.dMax[1]));
-        float nR = high_boost(safe_norm(D_sampled[2], rt.dMax[2]));
-
-        float corrY = rt.M[0][0] * nB + rt.M[1][0] * nG + rt.M[2][0] * nR;
-        float corrM = rt.M[0][1] * nB + rt.M[1][1] * nG + rt.M[2][1] * nR;
-        float corrC = rt.M[0][2] * nB + rt.M[1][2] * nG + rt.M[2][2] * nR;
-
-        corrY = clamp_corr(corrY);
-        corrM = clamp_corr(corrM);
-        corrC = clamp_corr(corrC);
-
-        float logE_corrected[3] = {
-            clamp_to_curve(logE_raw[0] - corrY, gDensityCurveB),
-            clamp_to_curve(logE_raw[1] - corrM, gDensityCurveG),
-            clamp_to_curve(logE_raw[2] - corrC, gDensityCurveR)
-        };
-
-        D[0] = sample_density_at_logE(gDensityCurveB, logE_corrected[0]);
-        D[1] = sample_density_at_logE(gDensityCurveG, logE_corrected[1]);
-        D[2] = sample_density_at_logE(gDensityCurveR, logE_corrected[2]);
-
-        for (int i = 0; i < 3; ++i) {
-            if (!std::isfinite(D[i]) || D[i] < 0.0f) {
-                D[i] = 0.0f;
-            }
-        }
-#else
-        (void)D; (void)E_in;
-#endif
-    }
-
-    // Balance negative sensitivities and density curves under a given reference illuminant.
-    // Uses gSensBlue/gSensGreen/gSensRed and shifts R/B density curves to match G at logE = 0.
-    inline void balance_negative_under_reference(const Curve& illumRef) {
-        const int K = gShape.K;
-        if (K <= 0) return;
-
-        // --- Guard against empty or mismatched reference curves ---
-        if (illumRef.linear.size() != static_cast<size_t>(K)) {
-            // Synthesize a pinned equal-energy curve to avoid OOB access
-            Curve eq;
-            eq.lambda_nm = gShape.wavelengths;
-            eq.linear.assign(K, 1.0f);
-            balance_negative_under_reference(eq);
-            return;
-        }
-
-        // Guard: sensitivities must be pinned to K before in-place scaling
-        const bool sens_ok =
-            gSensBlue.linear.size() == static_cast<size_t>(K) &&
-            gSensGreen.linear.size() == static_cast<size_t>(K) &&
-            gSensRed.linear.size() == static_cast<size_t>(K);
-
-        if (!sens_ok) {
-            // Nothing to do safely; avoid OOB writes
-            return;
-        }
-
-
-        // 1) Compute neutral exposures under reference illuminant using measured sensitivities
-
-        double nB = 0.0, nG = 0.0, nR = 0.0;
-        for (int i = 0; i < K; ++i) {
-            const double Ee = static_cast<double>(illumRef.linear[i]);
-            const double sB = static_cast<double>(gSensBlue.linear[i]);
-            const double sG = static_cast<double>(gSensGreen.linear[i]);
-            const double sR = static_cast<double>(gSensRed.linear[i]);
-            nB += Ee * sB;
-            nG += Ee * sG;
-            nR += Ee * sR;
-        }
-        if (nB <= 1e-20 || nG <= 1e-20 || nR <= 1e-20) return;
-
-        // 2) Correction factors to match green
-        const float corrB = static_cast<float>(nG / nB);
-        const float corrR = static_cast<float>(nG / nR);
-
-        // 3) Apply correction by scaling the sensitivity curves (in-place)
-        for (int i = 0; i < K; ++i) {
-            gSensBlue.linear[i] *= corrB;
-            gSensRed.linear[i] *= corrR;
-            // gSensGreen stays as reference
-        }
-
-        // 4) Align density curves so R/B match G at logE = 0
-        auto interp_density_at = [](const Curve& c, float x)->float {
-            const size_t n = c.lambda_nm.size();
-            if (n == 0) return 0.0f;
-            if (x <= c.lambda_nm.front()) return c.linear.front();
-            if (x >= c.lambda_nm.back())  return c.linear.back();
-            size_t i1 = 1;
-            while (i1 < n && c.lambda_nm[i1] < x) ++i1;
-            const size_t i0 = i1 - 1;
-            const float x0 = c.lambda_nm[i0], x1 = c.lambda_nm[i1];
-            const float y0 = c.linear[i0], y1 = c.linear[i1];
-            const float t = (x - x0) / (x1 - x0);
-            return y0 + t * (y1 - y0);
-            };
-
-        auto find_logE_for_density_local = [&](const Curve& c, float targetY)->float {
-            const size_t n = c.lambda_nm.size();
-            if (n < 2) return 0.0f;
-            for (size_t i = 1; i < n; ++i) {
-                const float x0 = c.lambda_nm[i - 1], x1 = c.lambda_nm[i];
-                const float y0 = c.linear[i - 1], y1 = c.linear[i];
-                if ((y0 <= targetY && targetY <= y1) || (y1 <= targetY && targetY <= y0)) {
-                    const float t = (y1 != y0) ? (targetY - y0) / (y1 - y0) : 0.0f;
-                    return x0 + t * (x1 - x0);
-                }
-            }
-            // Fallback to closest endpoint
-            const float d0 = std::abs(targetY - c.linear.front());
-            const float d1 = std::abs(targetY - c.linear.back());
-            return (d0 < d1) ? c.lambda_nm.front() : c.lambda_nm.back();
-            };
-
-        const float targetG = interp_density_at(gDensityCurveG, 0.0f);
-        const float shiftB = -find_logE_for_density_local(gDensityCurveB, targetG);
-        const float shiftR = -find_logE_for_density_local(gDensityCurveR, targetG);
-
-        for (float& x : gDensityCurveB.lambda_nm) x += shiftB;
-        for (float& x : gDensityCurveR.lambda_nm) x += shiftR;
-
-        mark_mixing_dirty();
-    }
+    }    
 
     // Non-global variant: balances sensitivities and shifts B/R density curve domains
     // so that at logE = 0 their densities match the green curve’s density.
@@ -2066,17 +1684,6 @@ namespace Spectral {
         for (float& x : densB_out.lambda_nm) x += shiftB;
         for (float& x : densR_out.lambda_nm) x += shiftR;
     }
-
-
-    // Sample Y,M,C densities at given per-layer logE, directly from the
-    // (already pre-warped) 1D density curves. These curves should be the
-    // “before-DIR” curves if you apply pre-warp on stock load.
-    inline void density_from_logE_with_offsets(const float logE[3], float D_out[3]) {
-        D_out[0] = sample_density_at_logE(gDensityCurveB, logE[0]); // Y <- B layer
-        D_out[1] = sample_density_at_logE(gDensityCurveG, logE[1]); // M <- G layer
-        D_out[2] = sample_density_at_logE(gDensityCurveR, logE[2]); // C <- R layer
-    }
-
 
     // Map layer exposures (E_B, E_G, E_R) to dye densities (D_Y, D_M, D_C)
     // 1) H-D curve per layer: Y<-B, M<-G, C<-R
@@ -2300,35 +1907,6 @@ namespace Spectral {
         const float w = Y / 0.18f;
         return std::clamp(w, 0.0f, 1.0f);
     }
-
-
-
-    inline void dwgRGB_through_negative(const float rgbIn[3], float exposureScale, float rgbOut[3]) {
-        // 1) Scene → dye densities over B+F (apply Exposure here). Do NOT add base here.
-        float D_curve_over_BF[3];
-        density_curve_rgb_dwg(rgbIn, /*exposureScale*/ exposureScale, D_curve_over_BF);
-
-        // 2) Use over‑B+F curves directly; baseline is added spectrally at integration time.
-        float D[3] = { D_curve_over_BF[0], D_curve_over_BF[1], D_curve_over_BF[2] };        
-
-        // 3) Integrate under Ee_view using per-call normalization above.
-
-        const float neutralW = neutral_blend_weight_from_DWG_rgb(rgbIn);
-        float XYZ[3];
-        if (gHasBaseline) {
-            dyes_to_XYZ_given_Ee_with_baseline(D, neutralW, XYZ);
-        }
-        else {
-            dyes_to_XYZ_given_Ee(D, XYZ);
-        }
-
-        // 6) XYZ → DWG
-        XYZ_to_DWG_linear(XYZ, rgbOut);
-    }
-
-
-
-
 
     // -------------------------------------------------------------------------
     // NEW: Convenience function to go DWG RGB -> dye densities with sensitivity gains

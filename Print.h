@@ -269,7 +269,7 @@ namespace Print {
             return out;
             };
 
-        // Canonical agx-emulsion print stock: BGR on disk        
+        // Canonical agx-emulsion print stock: density curves must come from JSON        
         bool usedJsonDensity = false;
         if (hasJsonProfile) {
             const auto& jsonR = profileJson.densityCurveR;
@@ -280,18 +280,22 @@ namespace Print {
                 m_dc = promote_pairs(jsonG); // G -> M
                 y_dc = promote_pairs(jsonB); // B -> Y
                 usedJsonDensity = true;
+                JuicerTrace::write("PRINT", "PROFILE_LOAD density curves from JSON '" + jsonProfilePath +
+                    "' samples C/M/Y=" + std::to_string(jsonR.size()) + "/" + std::to_string(jsonG.size()) +
+                    "/" + std::to_string(jsonB.size()));
             }
+            else {
+                JuicerTrace::write("PRINT", "PROFILE_LOAD missing JSON density curves in '" + jsonProfilePath + "'");
+            }
+        }
+        else {
+            JuicerTrace::write("PRINT", "PROFILE_LOAD no JSON profile for density curves in '" + dir + "'");
         }
 
         if (!usedJsonDensity) {
-            auto r_dc = load_pairs_silent(dir + "density_curve_r.csv"); // Red   -> Cyan
-            auto g_dc = load_pairs_silent(dir + "density_curve_g.csv"); // Green -> Magenta
-            auto b_dc = load_pairs_silent(dir + "density_curve_b.csv"); // Blue  -> Yellow
-
-            if (!r_dc.empty()) c_dc = promote_pairs(r_dc); // R -> C
-            if (!g_dc.empty()) m_dc = promote_pairs(g_dc); // G -> M
-            if (!b_dc.empty()) y_dc = promote_pairs(b_dc); // B -> Y
-
+            c_dc.clear();
+            m_dc.clear();
+            y_dc.clear();
         }
 
         // Align log-exposure domains with agx-emulsion using the per-channel
