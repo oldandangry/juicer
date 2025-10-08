@@ -110,7 +110,7 @@ namespace Spectral {
             Z += T * Az[i];
         }
 
-        float scale = gDeltaLambda * gInvYn;
+        float scale = gInvYn;
         XYZ_out[0] = X * scale;
         XYZ_out[1] = Y * scale;
         XYZ_out[2] = Z * scale;

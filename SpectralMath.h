@@ -1198,7 +1198,7 @@ namespace Spectral {
             sumAz += T.Az[i];
         }
         T.invYn = (Yn > 0.0) ? (1.0f / (float)Yn) : 1.0f;
-        const double scale = static_cast<double>(T.deltaLambda) * static_cast<double>(T.invYn);
+        const double scale = static_cast<double>(T.invYn);
         T.whiteXYZ[0] = static_cast<float>(scale * sumAx);
         T.whiteXYZ[1] = static_cast<float>(scale * sumAy);
         T.whiteXYZ[2] = static_cast<float>(scale * sumAz);
@@ -1370,7 +1370,7 @@ namespace Spectral {
             Y += Tlambda * T.Ay[i];
             Z += Tlambda * T.Az[i];
         }
-        const float s = T.deltaLambda * T.invYn;
+        const float s = T.invYn;
         XYZ[0] = (float)(X * s);
         XYZ[1] = (float)(Y * s);
         XYZ[2] = (float)(Z * s);
@@ -1396,7 +1396,7 @@ namespace Spectral {
             Y += Tlambda * T.Ay[i];
             Z += Tlambda * T.Az[i];
         }
-        const float s = T.deltaLambda * T.invYn;
+        const float s = T.invYn;
         XYZ[0] = (float)(X * s);
         XYZ[1] = (float)(Y * s);
         XYZ[2] = (float)(Z * s);
@@ -1427,7 +1427,7 @@ namespace Spectral {
         // Compute Δλ from the global spectral shape
         const float deltaLambda = (Spectral::gShape.lambdaMax - Spectral::gShape.lambdaMin)
             / float(Spectral::gShape.K - 1);
-        const float s = deltaLambda * Spectral::gInvYn;
+        const float s = Spectral::gInvYn;
 
         XYZ[0] = static_cast<float>(X * s);
         XYZ[1] = static_cast<float>(Y * s);
@@ -1449,7 +1449,7 @@ namespace Spectral {
             Y += static_cast<double>(e) * static_cast<double>(T.Ybar[i]);
             Z += static_cast<double>(e) * static_cast<double>(T.Zbar[i]);
         }
-        const float s = T.deltaLambda * T.invYn;
+        const float s = T.invYn;
         XYZ[0] = static_cast<float>(X * s);
         XYZ[1] = static_cast<float>(Y * s);
         XYZ[2] = static_cast<float>(Z * s);
@@ -1811,7 +1811,7 @@ namespace Spectral {
             Y += T * gAy[i];
             Z += T * gAz[i];
         }
-        const float s = gDeltaLambda * gInvYn;
+        const float s = gInvYn;
         XYZ[0] = static_cast<float>(X * s);
         XYZ[1] = static_cast<float>(Y * s);
         XYZ[2] = static_cast<float>(Z * s);
@@ -1859,7 +1859,7 @@ namespace Spectral {
             Y += T * gAy[i];
             Z += T * gAz[i];
         }
-        const float s = gDeltaLambda * gInvYn;
+        const float s = gInvYn;
         XYZ[0] = static_cast<float>(X * s);
         XYZ[1] = static_cast<float>(Y * s);
         XYZ[2] = static_cast<float>(Z * s);
