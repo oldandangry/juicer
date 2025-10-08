@@ -843,7 +843,42 @@ namespace Spectral {
         }
     }    
 
-    inline void hanatos_bilinear_spectrum(float qx, float qy, std::vector<float>& Ee_out) {
+    inline float mitchell_weight(float x) {
+        constexpr float B = 1.0f / 3.0f;
+        constexpr float C = 1.0f / 3.0f;
+        x = std::abs(x);
+        if (x < 1.0f) {
+            const float x2 = x * x;
+            const float x3 = x2 * x;
+            return ((12.0f - 9.0f * B - 6.0f * C) * x3 +
+                (-18.0f + 12.0f * B + 6.0f * C) * x2 +
+                (6.0f - 2.0f * B)) * (1.0f / 6.0f);
+        }
+        if (x < 2.0f) {
+            const float x2 = x * x;
+            const float x3 = x2 * x;
+            return ((-B - 6.0f * C) * x3 +
+                (6.0f * B + 30.0f * C) * x2 +
+                (-12.0f * B - 48.0f * C) * x +
+                (8.0f * B + 24.0f * C)) * (1.0f / 6.0f);
+        }
+        return 0.0f;
+    }
+
+    inline int reflect_index(int idx, int size) {
+        if (size <= 0) return 0;
+        while (idx < 0 || idx >= size) {
+            if (idx < 0) {
+                idx = -idx - 1;
+            }
+            else {
+                idx = 2 * size - idx - 1;
+            }
+        }
+        return idx;
+    }
+
+    inline void hanatos_cubic_spectrum(float qx, float qy, std::vector<float>& Ee_out) {
         const int K = gShape.K;
         Ee_out.resize(K);
 
@@ -855,34 +890,69 @@ namespace Spectral {
         const int N = gHanSpectra.size;
         const float fx = std::clamp(qx, 0.0f, 1.0f) * (N - 1);
         const float fy = std::clamp(qy, 0.0f, 1.0f) * (N - 1);
-        const int x0 = std::clamp(static_cast<int>(std::floor(fx)), 0, N - 1);
-        const int y0 = std::clamp(static_cast<int>(std::floor(fy)), 0, N - 1);
-        const int x1 = std::min(x0 + 1, N - 1);
-        const int y1 = std::min(y0 + 1, N - 1);
-        const float tx = fx - x0;
-        const float ty = fy - y0;
+        const int baseX = std::clamp(static_cast<int>(std::floor(fx)), 0, N - 1);
+        const int baseY = std::clamp(static_cast<int>(std::floor(fy)), 0, N - 1);
+        const float tx = fx - static_cast<float>(baseX);
+        const float ty = fy - static_cast<float>(baseY);
 
         auto at = [&](int i, int j, int k) -> float {
             size_t idx = ((static_cast<size_t>(i) * N + j) * static_cast<size_t>(gHanSpectra.numSamples) + k);
             return gHanSpectra.data[idx];
-            };
+        };
 
-        thread_local std::vector<float> s00, s10, s01, s11;
-        if ((int)s00.size() != K) {
-            s00.resize(K); s10.resize(K); s01.resize(K); s11.resize(K);
+        thread_local std::vector<float> tapBuffer;
+        const size_t required = static_cast<size_t>(K) * 16;
+        if (tapBuffer.size() != required) {
+            tapBuffer.resize(required);
         }
 
-        for (int k = 0; k < K; ++k) {
-            s00[k] = at(x0, y0, k);
-            s10[k] = at(x1, y0, k);
-            s01[k] = at(x0, y1, k);
-            s11[k] = at(x1, y1, k);
+        float wx[4];
+        float wy[4];
+        int xIndices[4];
+        int yIndices[4];
+
+        for (int i = 0; i < 4; ++i) {
+            const int offset = i - 1;
+            wx[i] = mitchell_weight(static_cast<float>(offset) - tx);
+            xIndices[i] = reflect_index(baseX + offset, N);
+            wy[i] = mitchell_weight(static_cast<float>(offset) - ty);
+            yIndices[i] = reflect_index(baseY + offset, N);
         }
 
-        for (int k = 0; k < K; ++k) {
-            const float a = s00[k] * (1.0f - tx) + s10[k] * tx;
-            const float b = s01[k] * (1.0f - tx) + s11[k] * tx;
-            Ee_out[k] = a * (1.0f - ty) + b * ty;
+        int tap = 0;
+        for (int j = 0; j < 4; ++j) {
+            const int yIdx = yIndices[j];
+            for (int i = 0; i < 4; ++i) {
+                const int xIdx = xIndices[i];
+                float* dest = tapBuffer.data() + static_cast<size_t>(tap) * static_cast<size_t>(K);
+                for (int k = 0; k < K; ++k) {
+                    dest[k] = at(xIdx, yIdx, k);
+                }
+                ++tap;
+            }
+        }
+
+        std::fill(Ee_out.begin(), Ee_out.end(), 0.0f);
+
+        float totalWeight = 0.0f;
+        tap = 0;
+        for (int j = 0; j < 4; ++j) {
+            for (int i = 0; i < 4; ++i) {
+                const float w = wx[i] * wy[j];
+                totalWeight += w;
+                const float* src = tapBuffer.data() + static_cast<size_t>(tap) * static_cast<size_t>(K);
+                for (int k = 0; k < K; ++k) {
+                    Ee_out[k] += src[k] * w;
+                }
+                ++tap;
+            }
+        }
+
+        if (totalWeight > 0.0f) {
+            const float invW = 1.0f / totalWeight;
+            for (int k = 0; k < K; ++k) {
+                Ee_out[k] *= invW;
+            }
         }
     }
 
@@ -919,7 +989,7 @@ namespace Spectral {
         float qx, qy;
         tri2quad(x, y, qx, qy);
 
-        hanatos_bilinear_spectrum(qx, qy, Ee_out);
+        hanatos_cubic_spectrum(qx, qy, Ee_out);
 
         if (b > 0.0f) {
             for (int i = 0; i < K; ++i) Ee_out[i] *= b;
