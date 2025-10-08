@@ -63,6 +63,9 @@
     <ClCompile Include="JuicerState.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="JuicerEffect.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SpectralMath.h">
@@ -108,6 +111,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="JuicerState.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="JuicerEffect.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
