@@ -35,6 +35,7 @@
 #include "JuicerEffect.h"
 #include "JuicerState.h"
 #include "OutputEncoding.h"
+#include "ParamNames.h"
 #include "Print.h"
 #include "ProfileJSONLoader.h"
 
@@ -213,10 +214,11 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
         }
         {
             OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(Couplers::kParamCouplersSpatialSigma);
-            p->setLabel("Couplers spatial diffusion");
+            p->setLabel("Couplers spatial diffusion (\xC2\xB5m)");
             p->setDefault(0.0);
-            p->setRange(0.0, 15.0);
-            p->setDisplayRange(0.0, 15.0);
+            p->setRange(0.0, 50.0);
+            p->setDisplayRange(0.0, 50.0);
+            p->setHint("Micrometers of DIR spatial diffusion; scaled by the Scanner film long edge parameter.");
             if (grpCouplers) p->setParent(*grpCouplers);
             p->setEvaluateOnChange(true);
         }
@@ -240,6 +242,14 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
         p->setLabel("Scanner target Y");
         p->setDefault(0.184);
         p->setDisplayRange(0.01, 1.0);
+    }
+    {
+        OFX::DoubleParamDescriptor* p = desc.defineDoubleParam(JuicerParams::kScannerFilmLongEdgeMm);
+        p->setLabel("Film long edge (mm)");
+        p->setDefault(36.0);
+        p->setRange(1.0, 400.0);
+        p->setDisplayRange(24.0, 320.0);
+        p->setHint("Longest film dimension in millimeters; used to convert DIR spatial diffusion micrometers to pixels.");
     }
 
     // Print group

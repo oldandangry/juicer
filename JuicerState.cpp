@@ -135,7 +135,7 @@ uint64_t hash_params(const ParamSnapshot& p) {
     h = mix(h, static_cast<uint64_t>(p.ratioB * 10000.0));
     h = mix(h, static_cast<uint64_t>(p.sigma * 10000.0));
     h = mix(h, static_cast<uint64_t>(p.high * 10000.0));
-    h = mix(h, static_cast<uint64_t>(p.spatialSigma * 10000.0));
+    h = mix(h, static_cast<uint64_t>(p.spatialSigmaMicrometers * 10000.0));
     h = mix(h, static_cast<uint64_t>(p.unmix));
     return h;
 }
@@ -591,7 +591,8 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
         };
         Couplers::build_dir_matrix(dirRT.M, amount, static_cast<float>(P.sigma));
         dirRT.highShift = static_cast<float>(P.high);
-        dirRT.spatialSigmaPixels = static_cast<float>(P.spatialSigma);
+        dirRT.spatialSigmaMicrometers = static_cast<float>(P.spatialSigmaMicrometers);
+        dirRT.spatialSigmaPixels = 0.0f;
 
         if (dirRT.active && P.couplersPrecorrect) {
             Spectral::Curve densB_corr, densG_corr, densR_corr;
@@ -997,6 +998,7 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
                 (prev->dirRT.M[2][0] == target->dirRT.M[2][0]) &&
                 (prev->dirRT.M[2][1] == target->dirRT.M[2][1]) &&
                 (prev->dirRT.M[2][2] == target->dirRT.M[2][2]) &&
+                (prev->dirRT.spatialSigmaMicrometers == target->dirRT.spatialSigmaMicrometers) &&
                 (prev->dirRT.spatialSigmaPixels == target->dirRT.spatialSigmaPixels);
 
             if (sameCouplers && prev->dirPrecorrected == target->dirPrecorrected) {

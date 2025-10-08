@@ -80,6 +80,7 @@ private:
     OFX::BooleanParam* _pScanEnabled = nullptr;
     OFX::BooleanParam* _pScanAuto = nullptr;
     OFX::DoubleParam* _pScanTargetY = nullptr;
+    OFX::DoubleParam* _pScanFilmLongEdge = nullptr;
 
     OFX::BooleanParam* _pPrintBypass = nullptr;
     OFX::DoubleParam* _pPrintExposure = nullptr;

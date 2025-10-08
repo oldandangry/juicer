@@ -116,5 +116,8 @@
     <ClInclude Include="JuicerEffect.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ParamNames.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

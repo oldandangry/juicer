@@ -72,7 +72,7 @@ struct ParamSnapshot {
     double ratioR = 0.7, ratioG = 0.7, ratioB = 0.5;
     double sigma = 1.0, high = 0.0;
     int unmix = 1;
-    double spatialSigma = 0.0;
+    double spatialSigmaMicrometers = 0.0;
 };
 
 uint64_t hash_params(const ParamSnapshot& p);

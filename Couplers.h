@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include "SpectralMath.h"
+#include "ParamNames.h"
 #include "ofxImageEffect.h"
 #include "ofxProperty.h"
 #include "ofxParam.h"
@@ -19,6 +20,7 @@ namespace Couplers {
         float M[3][3] = { {0,0,0},{0,0,0},{0,0,0} };
         float highShift = 0.0f;
         float dMax[3] = { 1.0f, 1.0f, 1.0f };
+        float spatialSigmaMicrometers = 0.0f;
         float spatialSigmaPixels = 0.0f; // ABI parity with enabled build
     };
 
@@ -57,7 +59,28 @@ namespace Couplers {
     static constexpr const char* kParamCouplersAmountR = "CouplersAmountR";
     static constexpr const char* kParamCouplersLayerSigma = "CouplersLayerDiffusion";
     static constexpr const char* kParamCouplersHighExpShift = "CouplersHighExposureShift";
-    static constexpr const char* kParamCouplersSpatialSigma = "CouplersSpatialDiffusion"; // pixels
+    static constexpr const char* kParamCouplersSpatialSigma = "CouplersSpatialDiffusion"; // micrometers
+
+    inline float spatial_sigma_pixels_from_micrometers(float sigmaUm, double filmLongEdgeMm,
+        double widthPixels, double heightPixels)
+    {
+        if (!(std::isfinite(sigmaUm)) || sigmaUm <= 0.0f) return 0.0f;
+        if (!(std::isfinite(filmLongEdgeMm)) || filmLongEdgeMm <= 0.0) return 0.0f;
+
+        const double longEdgePixels = std::max(widthPixels, heightPixels);
+        if (!(std::isfinite(longEdgePixels)) || longEdgePixels <= 0.0) return 0.0f;
+
+        const double filmLongEdgeUm = filmLongEdgeMm * 1000.0;
+        if (!(std::isfinite(filmLongEdgeUm)) || filmLongEdgeUm <= 0.0) return 0.0f;
+
+        const double pixelPitchUm = filmLongEdgeUm / longEdgePixels;
+        if (!(std::isfinite(pixelPitchUm)) || pixelPitchUm <= 0.0) return 0.0f;
+
+        double sigmaPixels = static_cast<double>(sigmaUm) / pixelPitchUm;
+        if (!(std::isfinite(sigmaPixels)) || sigmaPixels <= 0.0) return 0.0f;
+        if (sigmaPixels > 25.0) sigmaPixels = 25.0;
+        return static_cast<float>(sigmaPixels);
+    }
 
 
     // NOTE: In enabled builds we do not call maybe_precorrect_curves().
@@ -355,12 +378,14 @@ namespace Couplers {
         propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 1.0);
         propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
-        // Spatial diffusion (xy Gaussian in pixel domain), default 0 for speed/parity now
+        // Spatial diffusion (xy Gaussian, micrometers on film long edge), default 0 for speed/parity now
         paramSuite->paramDefine(ps, kOfxParamTypeDouble, kParamCouplersSpatialSigma, &p);
-        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers spatial diffusion");
+        propSuite->propSetString(p, kOfxPropLabel, 0, "Couplers spatial diffusion (\xC2\xB5m)");
         propSuite->propSetDouble(p, kOfxParamPropDefault, 0, 0.0);
         propSuite->propSetDouble(p, kOfxParamPropDisplayMin, 0, 0.0);
-        propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 15.0);
+        propSuite->propSetDouble(p, kOfxParamPropDisplayMax, 0, 50.0);
+        propSuite->propSetString(p, kOfxParamPropHint, 0,
+            "Micrometers of DIR spatial diffusion; scaled using the Scanner film long edge parameter.");
         propSuite->propSetString(p, kOfxParamPropParent, 0, kParamCouplersGroup);
 
     }
@@ -401,6 +426,7 @@ namespace Couplers {
         float M[3][3] = { {0,0,0},{0,0,0},{0,0,0} };
         float highShift = 0.0f;
         float dMax[3] = { 1.0f, 1.0f, 1.0f };
+        float spatialSigmaMicrometers = 0.0f;
         float spatialSigmaPixels = 0.0f; // 0 = disabled, later used for optional xy Gaussian
     };
 
@@ -414,6 +440,7 @@ namespace Couplers {
         double amountSlider = 1.0;
         double ar = 0.7, ag = 0.7, ab = 0.5, sigma = 1.0, high = 0.0;
         double spatial = 0.0;
+        double filmLongEdgeMm = 36.0;
         int activeInt = 1;
 
         OfxParamSetHandle ps = nullptr;
@@ -429,6 +456,11 @@ namespace Couplers {
             if (ps && paramSuite->paramGetHandle(ps, nm, &h, nullptr) == kOfxStatOK && h)
                 paramSuite->paramGetValue(h, &v);
             };
+        auto getOptionalDouble = [&](const char* nm, double& v) {
+            OfxParamHandle h = nullptr;
+            if (ps && paramSuite->paramGetHandle(ps, nm, &h, nullptr) == kOfxStatOK && h)
+                paramSuite->paramGetValue(h, &v);
+            };
 
         getB(kParamCouplersActive, activeInt);
         getD(kParamCouplersAmount, amountSlider);
@@ -438,6 +470,7 @@ namespace Couplers {
         getD(kParamCouplersLayerSigma, sigma);
         getD(kParamCouplersHighExpShift, high);
         getD(kParamCouplersSpatialSigma, spatial);
+        getOptionalDouble(JuicerParams::kScannerFilmLongEdgeMm, filmLongEdgeMm);
 
         // Defensive fences (slider thrash can transiently produce NaN/Inf)
         auto f01 = [](double v)->float {
@@ -451,8 +484,48 @@ namespace Couplers {
             return std::min(static_cast<float>(v), maxv);
             };
 
-        // Spatial sigma
-        rt.spatialSigmaPixels = fpos(spatial, /*cap*/ 15.0f);
+        // Spatial sigma (micrometers from UI; convert to pixels using film long edge)
+        rt.spatialSigmaMicrometers = fpos(spatial, /*max*/ 50.0f);
+        rt.spatialSigmaPixels = 0.0f;
+        if (rt.spatialSigmaMicrometers > 0.0f) {
+            double widthPixels = 0.0, heightPixels = 0.0;
+            if (effectSuite && propSuite) {
+                OfxPropertySetHandle effectProps = nullptr;
+                if (effectSuite->getPropertySet(instance, &effectProps) == kOfxStatOK && effectProps) {
+                    double projW = 0.0, projH = 0.0;
+                    if (propSuite->propGetDouble(effectProps, kOfxImageEffectPropProjectSize, 0, &projW) == kOfxStatOK &&
+                        propSuite->propGetDouble(effectProps, kOfxImageEffectPropProjectSize, 1, &projH) == kOfxStatOK) {
+                        widthPixels = projW;
+                        heightPixels = projH;
+                    }
+                    if ((widthPixels <= 0.0 || heightPixels <= 0.0)) {
+                        double rod[4] = { 0.0, 0.0, 0.0, 0.0 };
+                        bool haveRod = true;
+                        for (int i = 0; i < 4; ++i) {
+                            if (propSuite->propGetDouble(effectProps, kOfxImageEffectPropRegionOfDefinition, i, &rod[i]) != kOfxStatOK) {
+                                haveRod = false;
+                                break;
+                            }
+                        }
+                        if (haveRod) {
+                            widthPixels = rod[2] - rod[0];
+                            heightPixels = rod[3] - rod[1];
+                        }
+                    }
+                }
+            }
+            if (widthPixels > 0.0 && heightPixels > 0.0) {
+                const double filmEdge =
+                    (std::isfinite(filmLongEdgeMm) && filmLongEdgeMm > 0.0)
+                    ? filmLongEdgeMm
+                    : 36.0;
+                rt.spatialSigmaPixels = spatial_sigma_pixels_from_micrometers(
+                    rt.spatialSigmaMicrometers,
+                    filmEdge,
+                    widthPixels,
+                    heightPixels);
+            }
+        }
 
         rt.active = (activeInt != 0);
         auto famp = [](double v)->float {

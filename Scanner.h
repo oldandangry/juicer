@@ -1,9 +1,13 @@
 // Scanner.h
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+
 #include "SpectralTables.h"
 #include "SpectralMath.h"
 #include "Couplers.h"
+#include "ParamNames.h"
 #include "WorkingState.h"
 
 // Forward-declare WorkingState so we don't create header cycles
@@ -15,22 +19,29 @@ namespace Scanner {
         bool enabled = false;
         bool autoExposure = true;
         float targetY = 0.18f;
+        float filmLongEdgeMm = 36.0f;
     };
 
     inline void fetch_params(OfxParameterSuiteV1* paramSuite, OfxParamSetHandle paramSet, Params& out) {
         if (!paramSuite || !paramSet) { out = {}; out.autoExposure = true; out.targetY = 0.18f; return; }
-        OfxParamHandle hEnabled = nullptr, hAutoExp = nullptr, hTargetY = nullptr;
+        OfxParamHandle hEnabled = nullptr, hAutoExp = nullptr, hTargetY = nullptr, hFilmLongEdge = nullptr;
         paramSuite->paramGetHandle(paramSet, "ScannerEnabled", &hEnabled, nullptr);
         paramSuite->paramGetHandle(paramSet, "ScannerAutoExposure", &hAutoExp, nullptr);
         paramSuite->paramGetHandle(paramSet, "ScannerTargetY", &hTargetY, nullptr);
+        paramSuite->paramGetHandle(paramSet, JuicerParams::kScannerFilmLongEdgeMm, &hFilmLongEdge, nullptr);
         int enabled = 0, autoExp = 1;
         double targetY = 0.18;
+        double filmLongEdge = 36.0;
         if (hEnabled) paramSuite->paramGetValue(hEnabled, &enabled);
         if (hAutoExp) paramSuite->paramGetValue(hAutoExp, &autoExp);
         if (hTargetY) paramSuite->paramGetValue(hTargetY, &targetY);
+        if (hFilmLongEdge) paramSuite->paramGetValue(hFilmLongEdge, &filmLongEdge);
         out.enabled = (enabled != 0);
         out.autoExposure = (autoExp != 0);
         out.targetY = static_cast<float>(targetY);
+        out.filmLongEdgeMm = (std::isfinite(filmLongEdge) && filmLongEdge > 0.0)
+            ? static_cast<float>(filmLongEdge)
+            : 36.0f;
     }
 
     // Helper: sample densities from per-instance curves at given per-layer logE

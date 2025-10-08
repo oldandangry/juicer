@@ -16,6 +16,7 @@
 #include "NeutralFilters.h"
 #include "OutputEncoding.h"
 #include "Print.h"
+#include "ParamNames.h"
 #include "Scanner.h"
 #include "SpectralMath.h"
 #include "SpectralTables.h"
@@ -142,6 +143,7 @@ JuicerEffect::JuicerEffect(OfxImageEffectHandle handle)
         _pScanEnabled = fetchBooleanParam("ScannerEnabled");
         _pScanAuto = fetchBooleanParam("ScannerAutoExposure");
         _pScanTargetY = fetchDoubleParam("ScannerTargetY");
+        _pScanFilmLongEdge = fetchDoubleParam(JuicerParams::kScannerFilmLongEdgeMm);
 
         _pPrintBypass = fetchBooleanParam("PrintBypass");
         _pPrintExposure = fetchDoubleParam("PrintExposure");
@@ -196,14 +198,18 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
         return;
     }
 
+    const OfxRectI fullBounds = srcImg->getBounds();
+
     // ROI: args.renderWindow if provided; otherwise use image bounds
     OfxRectI roi = args.renderWindow;
     if (roi.x1 == roi.x2 && roi.y1 == roi.y2) {
-        roi = srcImg->getBounds();
+        roi = fullBounds;
     }
     const int width = roi.x2 - roi.x1;
     const int height = roi.y2 - roi.y1;
     if (width <= 0 || height <= 0) return;
+    const int fullWidth = fullBounds.x2 - fullBounds.x1;
+    const int fullHeight = fullBounds.y2 - fullBounds.y1;
 
     // Parameter reads
     double exposureSliderEV = 0.0;
@@ -222,12 +228,18 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
         // Use wrappers to read scanner params
         bool scanEnabled = false, scanAuto = true;
         double scanY = 0.18;
+        double scanFilmMm = 36.0;
         if (_pScanEnabled) _pScanEnabled->getValue(scanEnabled);
         if (_pScanAuto)    _pScanAuto->getValue(scanAuto);
         if (_pScanTargetY) _pScanTargetY->getValue(scanY);
+        if (_pScanFilmLongEdge) _pScanFilmLongEdge->getValue(scanFilmMm);
         scannerParams.enabled = scanEnabled;
         scannerParams.autoExposure = scanAuto;
         scannerParams.targetY = static_cast<float>(scanY);
+        scannerParams.filmLongEdgeMm =
+            (std::isfinite(scanFilmMm) && scanFilmMm > 0.0)
+            ? static_cast<float>(scanFilmMm)
+            : 36.0f;
     }
 
     Print::Params printParams;
@@ -312,8 +324,7 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
             };
 
         // Camera auto exposure compensation: adjust scene EV to reach target Y=0.184
-        if (scannerParams.autoExposure) {
-            OfxRectI fullBounds = srcImg->getBounds();
+        if (scannerParams.autoExposure) {            
             const double Yexp = measure_center_weighted_Y_DWG(srcImg.get(), fullBounds);
             // We will use ScannerTargetY as the target; fallback to 0.184 if invalid (agx parity).
             double targetY = 0.184;
@@ -358,6 +369,17 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
                 }
             }
         }
+        const double filmLongEdgeMm =
+            (std::isfinite(scannerParams.filmLongEdgeMm) && scannerParams.filmLongEdgeMm > 0.0f)
+            ? static_cast<double>(scannerParams.filmLongEdgeMm)
+            : 36.0;
+        const double widthPixels = static_cast<double>(fullWidth);
+        const double heightPixels = static_cast<double>(fullHeight);
+        dirRT.spatialSigmaPixels = Couplers::spatial_sigma_pixels_from_micrometers(
+            dirRT.spatialSigmaMicrometers,
+            filmLongEdgeMm,
+            widthPixels,
+            heightPixels);
         // Cap spatial sigma to a sane maximum to avoid impractical kernels
         if (!std::isfinite(dirRT.spatialSigmaPixels) || dirRT.spatialSigmaPixels < 0.0f)
             dirRT.spatialSigmaPixels = 0.0f;
@@ -481,7 +503,7 @@ ParamSnapshot JuicerEffect::snapshotParams() const {
     if (_pCouplersHigh)       _pCouplersHigh->getValue(P.high);
     double spatial = 0.0;
     if (_pCouplersSpatialSigma) _pCouplersSpatialSigma->getValue(spatial);
-    P.spatialSigma = spatial;
+    P.spatialSigmaMicrometers = spatial;
 #endif
     return P;
 }
