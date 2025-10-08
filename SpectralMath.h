@@ -881,7 +881,7 @@ namespace Spectral {
         for (int k = 0; k < K; ++k) {
             const float a = s00[k] * (1.0f - tx) + s10[k] * tx;
             const float b = s01[k] * (1.0f - tx) + s11[k] * tx;
-            Ee_out[k] = std::max(0.0f, a * (1.0f - ty) + b * ty);
+            Ee_out[k] = a * (1.0f - ty) + b * ty;
         }
     }
 
