@@ -101,7 +101,34 @@ namespace Spectral {
     {
         if (!curve.lambda_nm.empty()) {
             // Curve is already pinned to SpectralShape
+            const bool sameSize =
+                curve.linear.size() == gIlluminantCurve.linear.size() &&
+                curve.lambda_nm.size() == gIlluminantCurve.lambda_nm.size();
+
+            bool identical = sameSize;
+            if (identical) {
+                for (size_t i = 0; i < curve.lambda_nm.size(); ++i) {
+                    if (curve.lambda_nm[i] != gIlluminantCurve.lambda_nm[i]) {
+                        identical = false; break;
+                    }
+                }
+                if (identical) {
+                    constexpr float eps = 1e-6f;
+                    for (size_t i = 0; i < curve.linear.size(); ++i) {
+                        if (std::fabs(curve.linear[i] - gIlluminantCurve.linear[i]) > eps) {
+                            identical = false; break;
+                        }
+                    }
+                }
+            }
+
+            if (identical) {
+                return; // no change
+            }
+
             gIlluminantCurve = curve;
+            ++gIllumVersion;
+            mark_spectral_tables_dirty();
             return;
         }
         if (!pairs.empty()) {
