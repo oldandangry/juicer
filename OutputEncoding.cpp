@@ -81,11 +81,9 @@ namespace OutputEncoding {
         }
 
         inline float encode_Rec709(float v) {
-            const float linear = clamp01(v);
-            if (linear <= 0.018f) {
-                return clamp01(linear * 4.5f);
-            }
-            const float encoded = 1.099f * static_cast<float>(std::pow(linear, 0.45f)) - 0.099f;
+            const float signal = clamp01(v);
+            constexpr float kGamma = 2.4f; // ITU-R BT.1886 electro-optical transfer function
+            const float encoded = static_cast<float>(std::pow(signal, kGamma));
             return clamp01(encoded);
         }
 
