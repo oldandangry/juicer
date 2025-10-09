@@ -15,7 +15,7 @@ namespace OutputEncoding {
             }
         };
 
-        constexpr Mat3 kDWG_to_sRGB = {
+        constexpr Mat3 kDWG_to_BT709 = {
             {
                 1.89840485f, -0.79207266f, -0.10648889f,
                -0.16874849f,  1.48888814f, -0.32004050f,
@@ -80,6 +80,15 @@ namespace OutputEncoding {
             return v;
         }
 
+        inline float encode_Rec709(float v) {
+            const float linear = clamp01(v);
+            if (linear <= 0.018f) {
+                return clamp01(linear * 4.5f);
+            }
+            const float encoded = 1.099f * static_cast<float>(std::pow(linear, 0.45f)) - 0.099f;
+            return clamp01(encoded);
+        }
+
         inline float encode_sRGB(float v) {
             const float linear = clamp01(v);
             if (linear <= 0.0031308f) {
@@ -140,6 +149,8 @@ namespace OutputEncoding {
             switch (cs) {
             case ColorSpace::sRGB:
                 return encode_sRGB(v);
+            case ColorSpace::Rec709:
+                return encode_Rec709(v);
             case ColorSpace::DCI_P3:
                 return encode_gamma(v, 1.0f / 2.6f);
             case ColorSpace::DisplayP3:
@@ -161,8 +172,8 @@ namespace OutputEncoding {
 
         void convertFromDWG(ColorSpace cs, const float in[3], float out[3]) {
             switch (cs) {
-            case ColorSpace::sRGB:
-                kDWG_to_sRGB.mul(in, out);
+            case ColorSpace::Rec709:
+                kDWG_to_BT709.mul(in, out);
                 break;
             case ColorSpace::DCI_P3:
                 kDWG_to_DCI_P3.mul(in, out);
@@ -198,6 +209,7 @@ namespace OutputEncoding {
         bool hasEncoding(ColorSpace cs) {
             switch (cs) {
             case ColorSpace::sRGB:
+            case ColorSpace::Rec709:
             case ColorSpace::DCI_P3:
             case ColorSpace::DisplayP3:
             case ColorSpace::AdobeRGB:
