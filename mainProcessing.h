@@ -23,6 +23,7 @@ namespace JuicerProc {
     void renderPrintPreviewToBuffer(
         const OFX::Image* src, const OfxRectI& srcBounds,
         float* outRGB, int outW, int outH,
+        const Scanner::Params& scanPrm,
         const Print::Params& prm,
         const Print::Runtime* prt,
         const WorkingState* ws,

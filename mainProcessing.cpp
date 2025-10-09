@@ -160,6 +160,7 @@ namespace JuicerProc {
     void renderPrintPreviewToBuffer(
         const OFX::Image* src, const OfxRectI& srcBounds,
         float* outRGB, int outW, int outH,
+        const Scanner::Params& scanPrm,
         const Print::Params& prm,
         const Print::Runtime* prt,
         const WorkingState* ws,
@@ -167,17 +168,21 @@ namespace JuicerProc {
         float exposureScale,
         const OutputEncoding::Params& outputEncoding)
     {
-        if (!src || !outRGB || outW <= 0 || outH <= 0 || !prt || !ws) return;
+        if (!src || !outRGB || outW <= 0 || outH <= 0 || !ws) return;
 
         const int W = srcBounds.x2 - srcBounds.x1;
         const int H = srcBounds.y2 - srcBounds.y1;
         if (W <= 0 || H <= 0) return;
 
-        const float exposureCompScale = prm.exposureCompensationEnabled
-            ? prm.exposureCompensationScale
-            : 1.0f;
+        const bool useScanner = prm.bypass || !prt;
         float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
-        const float kMid_spectral = Print::compute_exposure_factor_midgray(*ws, *prt, prm, exposureCompScale, midgrayScale);
+        float kMid_spectral = 1.0f;
+        if (!useScanner && prt) {
+            const float exposureCompScale = prm.exposureCompensationEnabled
+                ? prm.exposureCompensationScale
+                : 1.0f;
+            kMid_spectral = Print::compute_exposure_factor_midgray(*ws, *prt, prm, exposureCompScale, midgrayScale);
+        }
 
         // Map preview pixel centers to source coordinates (bilinear interpolation)
         for (int yy = 0; yy < outH; ++yy) {
@@ -250,14 +255,22 @@ namespace JuicerProc {
 
                 float rgbOut[3] = { rgbIn[0], rgbIn[1], rgbIn[2] };
 
-                // Simulate print pixel using current params, runtime, and working state
-                Print::simulate_print_pixel(
-                    rgbIn, prm,
-                    *prt, dirRT, *ws,
-                    /*exposureScale*/ exposureScale,
-                    kMid_spectral,
-                    midgrayScale,
-                    rgbOut);
+                if (useScanner) {
+                    Scanner::simulate_scanner(
+                        rgbIn, rgbOut,
+                        scanPrm, dirRT, *ws,
+                        exposureScale);
+                }
+                else {
+                    // Simulate print pixel using current params, runtime, and working state
+                    Print::simulate_print_pixel(
+                        rgbIn, prm,
+                        *prt, dirRT, *ws,
+                        /*exposureScale*/ exposureScale,
+                        kMid_spectral,
+                        midgrayScale,
+                        rgbOut);
+                }
 
                 OutputEncoding::applyEncoding(outputEncoding, rgbOut);
                 dstPix[0] = rgbOut[0];
