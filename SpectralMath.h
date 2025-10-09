@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <vector>
 #include <utility>
+#include <iterator>
 #include <string>
 #include <sstream>
 #include <fstream>
@@ -1658,13 +1659,56 @@ namespace Spectral {
         }
         if (logE <= c.lambda_nm.front()) return c.linear.front();
         if (logE >= c.lambda_nm.back())  return c.linear.back();
-        size_t i1 = 1;
-        while (i1 < n && c.lambda_nm[i1] < logE) ++i1;
-        const size_t i0 = i1 - 1;
-        const float x0 = c.lambda_nm[i0], x1 = c.lambda_nm[i1];
-        const float y0 = c.linear[i0], y1 = c.linear[i1];
+
+        const auto begin = c.lambda_nm.begin();
+        const auto end = c.lambda_nm.end();
+        const auto it = std::lower_bound(begin, end, logE);
+
+        if (it == begin) {
+            return c.linear.front();
+        }
+        if (it == end) {
+            return c.linear.back();
+        }
+
+        const size_t idx = static_cast<size_t>(std::distance(begin, it));
+
+        // Fold duplicated knot positions before interpolation (matches agx behaviour).
+        if (*it == logE) {
+            size_t first = idx;
+            while (first > 0 && c.lambda_nm[first - 1] == logE) {
+                --first;
+            }
+            size_t last = idx;
+            while (last + 1 < n && c.lambda_nm[last + 1] == logE) {
+                ++last;
+            }
+            float sum = 0.0f;
+            for (size_t i = first; i <= last; ++i) {
+                sum += c.linear[i];
+            }
+            return sum / static_cast<float>(last - first + 1);
+        }
+
+        size_t i1 = idx;
+        size_t i0 = i1 - 1;
+
+        // If the upper knot is duplicated, walk left until we have a distinct lower knot.
+        while (i0 > 0 && c.lambda_nm[i0] == c.lambda_nm[i1]) {
+            --i0;
+        }
+
+        const float x0 = c.lambda_nm[i0];
+        const float x1 = c.lambda_nm[i1];
+        const float y0 = c.linear[i0];
+        const float y1 = c.linear[i1];
+
+        if (x1 == x0) {
+            return y1;
+        }
         const float t = (logE - x0) / (x1 - x0);
         return y0 + t * (y1 - y0);
+
     }    
 
     // Non-global variant: balances sensitivities and shifts B/R density curve domains
