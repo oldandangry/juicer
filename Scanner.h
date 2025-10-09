@@ -59,6 +59,11 @@ namespace Scanner {
         const WorkingState& ws,
         float exposureScale)
     {
+        const float exposureScaleSafe =
+            (std::isfinite(exposureScale) && exposureScale > 0.0f)
+            ? exposureScale
+            : 1.0f;
+
         if (!scannerParams.enabled) {
             rgbOut[0] = rgbIn[0];
             rgbOut[1] = rgbIn[1];
@@ -77,7 +82,7 @@ namespace Scanner {
         const Spectral::Curve& sensR_forExposure =
             ws.negSensR.linear.empty() ? ws.sensR : ws.negSensR;
         Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
-            rgbIn, E, exposureScale,
+            rgbIn, E, exposureScaleSafe,
             tablesSPD,
             (ws.spdReady ? ws.spdSInv : nullptr),
             ws.spdReady,
@@ -148,11 +153,7 @@ namespace Scanner {
         if (scannerParams.autoExposure) {
             const float targetY = (std::isfinite(scannerParams.targetY) && scannerParams.targetY > 0.0f)
                 ? scannerParams.targetY
-                : 0.184f;
-
-            const float exposureScaleSafe = (std::isfinite(exposureScale) && exposureScale > 0.0f)
-                ? exposureScale
-                : 1.0f;
+                : 0.184f;            
 
             struct AutoExposureCache {
                 const WorkingState* ws = nullptr;
