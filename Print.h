@@ -556,11 +556,16 @@ namespace Print {
 
         if (!baselineMinPairs.empty() && !baselineMidPairs.empty()) {
             if (baselineScale != 1.0f) {
-                for (auto& sample : baselineMinPairs) {
-                    if (std::isfinite(sample.second)) {
-                        sample.second *= baselineScale;
+                auto scale_baseline = [baselineScale](std::vector<std::pair<float, float>>& samples) {
+                    for (auto& sample : samples) {
+                        if (std::isfinite(sample.second)) {
+                            sample.second *= baselineScale;
+                        }
                     }
-                }
+                    };
+                // Apply the JSON-authored baseline scale to both min and mid curves for parity with agx-emulsion.
+                scale_baseline(baselineMinPairs);
+                scale_baseline(baselineMidPairs);
             }
             build_curve_on_shape_from_linear_pairs(out.baseMin, baselineMinPairs);
             build_curve_on_shape_from_linear_pairs(out.baseMid, baselineMidPairs);
