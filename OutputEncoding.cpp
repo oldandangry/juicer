@@ -172,6 +172,7 @@ namespace OutputEncoding {
 
         void convertFromDWG(ColorSpace cs, const float in[3], float out[3]) {
             switch (cs) {
+            case ColorSpace::sRGB:
             case ColorSpace::Rec709:
                 kDWG_to_BT709.mul(in, out);
                 break;
