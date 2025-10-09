@@ -179,24 +179,75 @@ namespace JuicerProc {
         float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
         const float kMid_spectral = Print::compute_exposure_factor_midgray(*ws, *prt, prm, exposureCompScale, midgrayScale);
 
-        // Map preview pixel centers to source coordinates (nearest neighbor)
+        // Map preview pixel centers to source coordinates (bilinear interpolation)
         for (int yy = 0; yy < outH; ++yy) {
             for (int xx = 0; xx < outW; ++xx) {
                 const float fx = (xx + 0.5f) / float(outW);
                 const float fy = (yy + 0.5f) / float(outH);
 
-                int sx = srcBounds.x1 + std::min(std::max(int(std::floor(fx * W)), 0), W - 1);
-                int sy = srcBounds.y1 + std::min(std::max(int(std::floor(fy * H)), 0), H - 1);
+                float sampleX = srcBounds.x1 + fx * float(W);
+                float sampleY = srcBounds.y1 + fy * float(H);
 
-                const float* srcPix = reinterpret_cast<const float*>(src->getPixelAddress(sx, sy));
+                sampleX = std::min(std::max(sampleX, float(srcBounds.x1)), float(srcBounds.x2 - 1));
+                sampleY = std::min(std::max(sampleY, float(srcBounds.y1)), float(srcBounds.y2 - 1));
+
+                int x0 = int(std::floor(sampleX));
+                int y0 = int(std::floor(sampleY));
+                int x1 = x0 + 1;
+                int y1 = y0 + 1;
+
+                float tx = sampleX - float(x0);
+                float ty = sampleY - float(y0);
+
+                if (x1 >= srcBounds.x2) {
+                    x1 = x0;
+                    tx = 0.0f;
+                }
+                if (y1 >= srcBounds.y2) {
+                    y1 = y0;
+                    ty = 0.0f;
+                }
+
+                const float* src00 = reinterpret_cast<const float*>(src->getPixelAddress(x0, y0));
+                const float* src10 = reinterpret_cast<const float*>(src->getPixelAddress(x1, y0));
+                const float* src01 = reinterpret_cast<const float*>(src->getPixelAddress(x0, y1));
+                const float* src11 = reinterpret_cast<const float*>(src->getPixelAddress(x1, y1));
+
+                const float w00 = (1.0f - tx) * (1.0f - ty);
+                const float w10 = tx * (1.0f - ty);
+                const float w01 = (1.0f - tx) * ty;
+                const float w11 = tx * ty;
+
+                float rgbIn[3] = { 0.0f, 0.0f, 0.0f };
+
+                if (src00) {
+                    rgbIn[0] += src00[0] * w00;
+                    rgbIn[1] += src00[1] * w00;
+                    rgbIn[2] += src00[2] * w00;
+                }
+                if (src10) {
+                    rgbIn[0] += src10[0] * w10;
+                    rgbIn[1] += src10[1] * w10;
+                    rgbIn[2] += src10[2] * w10;
+                }
+                if (src01) {
+                    rgbIn[0] += src01[0] * w01;
+                    rgbIn[1] += src01[1] * w01;
+                    rgbIn[2] += src01[2] * w01;
+                }
+                if (src11) {
+                    rgbIn[0] += src11[0] * w11;
+                    rgbIn[1] += src11[1] * w11;
+                    rgbIn[2] += src11[2] * w11;
+                }
+                
                 float* dstPix = &outRGB[(size_t(yy) * outW + size_t(xx)) * 3];
 
-                if (!srcPix) {
+                if ((!src00 && !src10 && !src01 && !src11)) {
                     dstPix[0] = dstPix[1] = dstPix[2] = 0.0f;
                     continue;
                 }
 
-                float rgbIn[3] = { srcPix[0], srcPix[1], srcPix[2] };
                 float rgbOut[3] = { rgbIn[0], rgbIn[1], rgbIn[2] };
 
                 // Simulate print pixel using current params, runtime, and working state
