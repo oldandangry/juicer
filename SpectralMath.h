@@ -214,6 +214,15 @@ namespace Spectral {
             size_t i0 = i1 - 1;
             float x0 = lambda_nm[i0], x1 = lambda_nm[i1];
             float y0 = linear[i0], y1 = linear[i1];
+            if (!(std::isfinite(x0) && std::isfinite(x1)) || x1 <= x0) {
+                return y0;
+            }
+            if (!std::isfinite(y0)) {
+                y0 = std::isfinite(y1) ? y1 : 0.0f;
+            }
+            if (!std::isfinite(y1)) {
+                y1 = y0;
+            }
             float t = (lambda - x0) / (x1 - x0);
             return y0 + t * (y1 - y0);
         }
