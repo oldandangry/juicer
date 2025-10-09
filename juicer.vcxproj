@@ -186,6 +186,7 @@
     <ClInclude Include="Illuminants.h" />
     <ClInclude Include="JuicerEffect.h" />
     <ClInclude Include="JuicerState.h" />
+    <ClInclude Include="LogExposureOffsets.h" />
     <ClInclude Include="mainProcessing.h" />
     <ClInclude Include="NeutralFilters.h" />
     <ClInclude Include="NpyLoader.h" />

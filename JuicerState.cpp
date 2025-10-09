@@ -1,5 +1,7 @@
 #include "JuicerState.h"
 
+#include "LogExposureOffsets.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -951,13 +953,41 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
         }
     }
 
-    const float offB = 0.0f;
-    const float offG = 0.0f;
-    const float offR = 0.0f;
+    std::array<float, 3> densityMidRGB{ {0.0f, 0.0f, 0.0f} };
+    bool hasDensityMid = !S.base.densityMidNeutral.empty();
+    if (hasDensityMid) {
+        float seed = 0.0f;
+        if (std::isfinite(S.base.densityMidNeutral.front())) {
+            seed = S.base.densityMidNeutral.front();
+        }
+        densityMidRGB.fill(seed);
+        const size_t count = std::min<size_t>(3, S.base.densityMidNeutral.size());
+        for (size_t i = 0; i < count; ++i) {
+            const float v = S.base.densityMidNeutral[i];
+            if (std::isfinite(v)) {
+                densityMidRGB[i] = v;
+            }
+        }
+    }
+
+    const std::array<float, 3> offsetsRGB = hasDensityMid
+        ? RebuildWorkingState::compute_mid_neutral_logE_offsets_rgb(densR, densG, densB, densityMidRGB)
+        : std::array<float, 3>{ {0.0f, 0.0f, 0.0f} };
+
+    const float offR = offsetsRGB[0];
+    const float offG = offsetsRGB[1];
+    const float offB = offsetsRGB[2];
 
     {
         std::ostringstream oss;
-        oss << "negative logE offsets B/G/R=" << offB << "/" << offG << "/" << offR << " (agx parity)";
+        if (hasDensityMid) {
+            oss << "negative logE offsets B/G/R=" << offB << "/" << offG << "/" << offR
+                << " (density_midscale_neutral)";
+        }
+        else {
+            oss << "negative logE offsets B/G/R=" << offB << "/" << offG << "/" << offR
+                << " (no density_midscale_neutral)";
+        }
         JTRACE("BUILD", oss.str());
     }
 
