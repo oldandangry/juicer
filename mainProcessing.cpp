@@ -4,6 +4,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <cstdint>
 
 // Resolve OFX support library C++ wrappers — suppress MSVC C5040 for dynamic exception specs
 #pragma warning(push)
@@ -153,6 +154,116 @@ static inline float sample_density_at_logE_safe(const Spectral::Curve& c, float 
     return y0 + t * (y1 - y0);
 }
 
+namespace {
+
+    struct SpatialDIRWorkspace {
+        std::vector<float> logE_B, logE_G, logE_R;
+        std::vector<float> corrY, corrM, corrC;
+        std::vector<float> corrYBlur, corrMBlur, corrCBlur;
+        std::vector<float> tmp; // reused for separable blur scratch
+    };
+
+    template <typename FetchRGB, typename AbortCheck>
+    void buildSpatialDIRCorrections(
+        int width, int height,
+        const WorkingState& ws,
+        const Couplers::Runtime& dirRT,
+        float exposureScale,
+        FetchRGB&& fetchRGB,
+        AbortCheck&& abortCheck,
+        SpatialDIRWorkspace& work)
+    {
+        const size_t total = size_t(width) * size_t(height);
+        work.logE_B.assign(total, 0.0f);
+        work.logE_G.assign(total, 0.0f);
+        work.logE_R.assign(total, 0.0f);
+        work.corrY.assign(total, 0.0f);
+        work.corrM.assign(total, 0.0f);
+        work.corrC.assign(total, 0.0f);
+
+        auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
+            if (c.lambda_nm.empty()) return le;
+            const float xmin = c.lambda_nm.front();
+            const float xmax = c.lambda_nm.back();
+            if (!std::isfinite(le)) return xmin;
+            return std::min(std::max(le, xmin), xmax);
+            };
+
+        // Pass A: sample exposures, convert to logE, compute DIR corrections per pixel.
+        for (int yy = 0; yy < height; ++yy) {
+            if (abortCheck()) break;
+            for (int xx = 0; xx < width; ++xx) {
+                const size_t idx = size_t(yy) * size_t(width) + size_t(xx);
+                float rgbIn[3] = { 0.0f, 0.0f, 0.0f };
+                if (!fetchRGB(xx, yy, rgbIn)) {
+                    work.logE_B[idx] = work.logE_G[idx] = work.logE_R[idx] = 0.0f;
+                    work.corrY[idx] = work.corrM[idx] = work.corrC[idx] = 0.0f;
+                    continue;
+                }
+
+                float E[3];
+                const SpectralTables* tablesSPD =
+                    (ws.spdReady && ws.tablesRef.K > 0) ? &ws.tablesRef : nullptr;
+                Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
+                    rgbIn, E, 1.0f,
+                    tablesSPD,
+                    (ws.spdReady ? ws.spdSInv : nullptr),
+                    ws.spdReady,
+                    ws.sensB, ws.sensG, ws.sensR);
+
+                const float sExp = (std::isfinite(exposureScale) ? std::max(0.0f, exposureScale) : 1.0f);
+                if (sExp != 1.0f) {
+                    E[0] *= sExp; E[1] *= sExp; E[2] *= sExp;
+                }
+
+                float leB = std::log10(std::max(0.0f, E[0]) + 1e-10f) + ws.logEOffB;
+                float leG = std::log10(std::max(0.0f, E[1]) + 1e-10f) + ws.logEOffG;
+                float leR = std::log10(std::max(0.0f, E[2]) + 1e-10f) + ws.logEOffR;
+
+                leB = clamp_logE_to_curve(ws.densB, leB);
+                leG = clamp_logE_to_curve(ws.densG, leG);
+                leR = clamp_logE_to_curve(ws.densR, leR);
+
+                work.logE_B[idx] = leB;
+                work.logE_G[idx] = leG;
+                work.logE_R[idx] = leR;
+
+                float D_Y = sample_density_at_logE_safe(ws.densB, leB);
+                float D_M = sample_density_at_logE_safe(ws.densG, leG);
+                float D_C = sample_density_at_logE_safe(ws.densR, leR);
+
+                float aCorr[3];
+                Couplers::ApplyInputLogE io{ { leB, leG, leR }, { D_Y, D_M, D_C } };
+                Couplers::compute_logE_corrections(io, dirRT, aCorr);
+                for (float& v : aCorr) {
+                    if (!std::isfinite(v)) v = 0.0f;
+                }
+                work.corrY[idx] = aCorr[0];
+                work.corrM[idx] = aCorr[1];
+                work.corrC[idx] = aCorr[2];
+            }
+        }
+
+        // Blur corrections spatially (shared between preview + render path)
+        std::vector<float> kernel;
+        JuicerProc::buildGaussianKernel(dirRT.spatialSigmaPixels, kernel);
+        JuicerProc::blurChannelSeparable(work.corrY, work.tmp, work.corrYBlur, width, height, kernel);
+        JuicerProc::blurChannelSeparable(work.corrM, work.tmp, work.corrMBlur, width, height, kernel);
+        JuicerProc::blurChannelSeparable(work.corrC, work.tmp, work.corrCBlur, width, height, kernel);
+
+        auto scrubClamp = [](std::vector<float>& v) {
+            for (float& t : v) {
+                if (!std::isfinite(t)) t = 0.0f;
+                if (t < -10.0f) t = -10.0f;
+                if (t > 10.0f) t = 10.0f;
+            }
+            };
+        scrubClamp(work.corrYBlur);
+        scrubClamp(work.corrMBlur);
+        scrubClamp(work.corrCBlur);
+    }
+}
+
 
 namespace JuicerProc {
     // Note: print preview should be measured at unit scene exposure for compensation;
@@ -175,6 +286,9 @@ namespace JuicerProc {
         if (W <= 0 || H <= 0) return;
 
         const bool useScanner = prm.bypass || !prt;
+        const bool curvesReady = curve_ok(ws->densB) && curve_ok(ws->densG) && curve_ok(ws->densR);
+        const bool doSpatial = (!useScanner) && dirRT.active && std::isfinite(dirRT.spatialSigmaPixels)
+            && dirRT.spatialSigmaPixels > 0.5f && curvesReady;
         float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
         float kMid_spectral = 1.0f;
         if (!useScanner && prt) {
@@ -183,6 +297,10 @@ namespace JuicerProc {
                 : 1.0f;
             kMid_spectral = Print::compute_exposure_factor_midgray(*ws, *prt, prm, exposureCompScale, midgrayScale);
         }
+
+        const size_t totalPix = size_t(outW) * size_t(outH);
+        std::vector<float> sampledRGB(totalPix * 3, 0.0f);
+        std::vector<uint8_t> sampleValid(totalPix, 0);
 
         // Map preview pixel centers to source coordinates (bilinear interpolation)
         for (int yy = 0; yy < outH; ++yy) {
@@ -244,14 +362,56 @@ namespace JuicerProc {
                     rgbIn[0] += src11[0] * w11;
                     rgbIn[1] += src11[1] * w11;
                     rgbIn[2] += src11[2] * w11;
-                }
+                }            
                 
-                float* dstPix = &outRGB[(size_t(yy) * outW + size_t(xx)) * 3];
 
-                if ((!src00 && !src10 && !src01 && !src11)) {
+                const bool hasSample = (src00 || src10 || src01 || src11);
+                const size_t idx = size_t(yy) * size_t(outW) + size_t(xx);
+                if (hasSample) {
+                    sampleValid[idx] = 1;
+                    sampledRGB[idx * 3 + 0] = rgbIn[0];
+                    sampledRGB[idx * 3 + 1] = rgbIn[1];
+                    sampledRGB[idx * 3 + 2] = rgbIn[2];
+                }
+            }
+        }
+
+        SpatialDIRWorkspace previewSpatial;
+        const bool haveSpatial = doSpatial;
+        if (haveSpatial) {
+            auto fetchSample = [&](int xx, int yy, float rgb[3])->bool {
+                const size_t idx = size_t(yy) * size_t(outW) + size_t(xx);
+                if (!sampleValid[idx]) return false;
+                rgb[0] = sampledRGB[idx * 3 + 0];
+                rgb[1] = sampledRGB[idx * 3 + 1];
+                rgb[2] = sampledRGB[idx * 3 + 2];
+                return true;
+                };
+            auto abortNever = []() -> bool { return false; };
+            buildSpatialDIRCorrections(
+                outW, outH,
+                *ws,
+                dirRT,
+                exposureScale,
+                fetchSample,
+                abortNever,
+                previewSpatial);
+        }
+
+        for (int yy = 0; yy < outH; ++yy) {
+            for (int xx = 0; xx < outW; ++xx) {
+                const size_t idx = size_t(yy) * size_t(outW) + size_t(xx);
+                float* dstPix = &outRGB[idx * 3];
+                if (!sampleValid[idx]) {
                     dstPix[0] = dstPix[1] = dstPix[2] = 0.0f;
                     continue;
                 }
+
+                float rgbIn[3] = {
+                    sampledRGB[idx * 3 + 0],
+                    sampledRGB[idx * 3 + 1],
+                    sampledRGB[idx * 3 + 2]
+                };
 
                 float rgbOut[3] = { rgbIn[0], rgbIn[1], rgbIn[2] };
 
@@ -261,8 +421,118 @@ namespace JuicerProc {
                         scanPrm, dirRT, *ws,
                         exposureScale);
                 }
-                else {
-                    // Simulate print pixel using current params, runtime, and working state
+                else if (haveSpatial && prt) {
+                    float leB2 = previewSpatial.logE_B[idx] - previewSpatial.corrYBlur[idx];
+                    float leG2 = previewSpatial.logE_G[idx] - previewSpatial.corrMBlur[idx];
+                    float leR2 = previewSpatial.logE_R[idx] - previewSpatial.corrCBlur[idx];
+
+                    auto clamp_to = [](float le, const Spectral::Curve& c)->float {
+                        if (c.lambda_nm.empty()) return le;
+                        const float xmin = c.lambda_nm.front();
+                        const float xmax = c.lambda_nm.back();
+                        if (!std::isfinite(le)) return xmin;
+                        return std::min(std::max(le, xmin), xmax);
+                        };
+                    leB2 = clamp_to(leB2, ws->densB);
+                    leG2 = clamp_to(leG2, ws->densG);
+                    leR2 = clamp_to(leR2, ws->densR);
+
+                    float D_cmy[3];
+                    D_cmy[0] = sample_density_at_logE_safe(ws->densB, leB2);
+                    D_cmy[1] = sample_density_at_logE_safe(ws->densG, leG2);
+                    D_cmy[2] = sample_density_at_logE_safe(ws->densR, leR2);
+
+                    for (int i = 0; i < 3; ++i) {
+                        float v = D_cmy[i];
+                        if (!std::isfinite(v) || v < 0.0f) v = 0.0f;
+                        if (v > 1000.0f) v = 1000.0f;
+                        D_cmy[i] = v;
+                    }
+
+                    thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
+                    thread_local std::vector<float> Tpreflash, Ee_preflash;
+
+                    Print::negative_T_from_dyes(*ws, D_cmy, Tneg);
+
+                    const int K = std::min(ws->tablesView.K, ws->tablesPrint.K);
+                    if (K > 0) {
+                        if (int(Tneg.size()) < K) Tneg.resize(size_t(K), 0.0f);
+
+                        Ee_expose.resize(size_t(K));
+                        for (int i = 0; i < K; ++i) {
+                            const float Ee = (prt->illumEnlarger.linear.size() > size_t(i))
+                                ? prt->illumEnlarger.linear[i]
+                                : 1.0f;
+                            Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
+                        }
+
+                        Ee_filtered.resize(size_t(K));
+                        const float yAmount = Print::compose_dichroic_amount(prt->neutralY, prm.yFilter);
+                        const float mAmount = Print::compose_dichroic_amount(prt->neutralM, prm.mFilter);
+                        const float cAmount = Print::compose_dichroic_amount(prt->neutralC, 0.0f);
+                        for (int i = 0; i < K; ++i) {
+                            const float fY = Print::blend_dichroic_filter_linear(
+                                (prt->filterY.linear.size() > size_t(i)) ? prt->filterY.linear[i] : 1.0f,
+                                yAmount);
+                            const float fM = Print::blend_dichroic_filter_linear(
+                                (prt->filterM.linear.size() > size_t(i)) ? prt->filterM.linear[i] : 1.0f,
+                                mAmount);
+                            const float fC = Print::blend_dichroic_filter_linear(
+                                (prt->filterC.linear.size() > size_t(i)) ? prt->filterC.linear[i] : 1.0f,
+                                cAmount);
+                            const float fTotal = fY * fM * fC;
+                            Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
+                        }
+
+                        float raw[3];
+                        Print::raw_exposures_from_filtered_light(
+                            prt->profile, Ee_filtered, raw);
+
+                        const float rawScale = prm.exposure * kMid_spectral;
+                        raw[0] *= rawScale * midgrayScale[0];
+                        raw[1] *= rawScale * midgrayScale[1];
+                        raw[2] *= rawScale * midgrayScale[2];
+
+                        if (std::isfinite(prm.preflashExposure) && prm.preflashExposure > 0.0f) {
+                            float rawPre[3];
+                            Print::compute_preflash_raw(*prt, *ws, Tpreflash, Ee_preflash, rawPre);
+                            raw[0] += rawPre[0] * prm.preflashExposure * midgrayScale[0];
+                            raw[1] += rawPre[1] * prm.preflashExposure * midgrayScale[1];
+                            raw[2] += rawPre[2] * prm.preflashExposure * midgrayScale[2];
+                        }
+
+                        float D_print[3];
+                        Print::print_densities_from_Eprint(prt->profile, raw, D_print);
+
+                        Print::print_T_from_dyes(prt->profile, D_print, Tprint);
+                        if (int(Tprint.size()) < K) Tprint.resize(size_t(K), 0.0f);
+
+                        Ee_viewed.resize(size_t(K));
+                        for (int i = 0; i < K; ++i) {
+                            const float Ev = (prt->illumView.linear.size() > size_t(i))
+                                ? prt->illumView.linear[i]
+                                : 1.0f;
+                            Ee_viewed[i] = std::max(0.0f, Ev * Tprint[i]);
+                        }
+                        float XYZ[3];
+                        Spectral::Ee_to_XYZ_given_tables(ws->tablesPrint, Ee_viewed, XYZ);
+                        Spectral::XYZ_to_DWG_linear_adapted(ws->tablesPrint, XYZ, rgbOut);
+                        rgbOut[0] = std::max(0.0f, rgbOut[0]);
+                        rgbOut[1] = std::max(0.0f, rgbOut[1]);
+                        rgbOut[2] = std::max(0.0f, rgbOut[2]);
+                    }
+                    else {
+                        // Fallback to non-spatial print simulation if tables are invalid.
+                        Print::simulate_print_pixel(
+                            rgbIn, prm,
+                            *prt, dirRT, *ws,
+                            exposureScale,
+                            kMid_spectral,
+                            midgrayScale,
+                            rgbOut);
+                    }
+                }
+                else {                    
                     Print::simulate_print_pixel(
                         rgbIn, prm,
                         *prt, dirRT, *ws,
@@ -337,103 +607,27 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
         return curve_ok(_ws->densB) && curve_ok(_ws->densG) && curve_ok(_ws->densR);
         };
 
-    if (_dirRT.active && doSpatial && _nComponents >= 3 && _wsReady && _ws && curvesReady()) {        
-        std::vector<float> logE_B(size_t(tileW * tileH));
-        std::vector<float> logE_G(size_t(tileW * tileH));
-        std::vector<float> logE_R(size_t(tileW * tileH));
-
-        std::vector<float> aY(size_t(tileW * tileH));
-        std::vector<float> aM(size_t(tileW * tileH));
-        std::vector<float> aC(size_t(tileW * tileH));
-
-        // Pass A
-        for (int yy = 0; yy < tileH; ++yy) {
-            if (_effect.abort()) break;
-            for (int xx = 0; xx < tileW; ++xx) {
-                const int x = procWindow.x1 + xx;
-                const int y = procWindow.y1 + yy;
-                const float* srcPix = reinterpret_cast<const float*>(_srcImg->getPixelAddress(x, y));
-                const size_t idx = size_t(yy * tileW + xx);
-
-                if (!srcPix) {
-                    logE_B[idx] = logE_G[idx] = logE_R[idx] = 0.0f;
-                    aY[idx] = aM[idx] = aC[idx] = 0.0f;
-                    continue;
-                }
-
-                float rgbIn[3] = { srcPix[0], srcPix[1], srcPix[2] };
-                float E[3];
-                const SpectralTables* tablesSPD =
-                    (_ws && _ws->spdReady && _ws->tablesRef.K > 0) ? &_ws->tablesRef : nullptr;
-                Spectral::rgbDWG_to_layerExposures_from_tables_with_curves(
-                    rgbIn, E, 1.0f,
-                    tablesSPD,
-                    (_ws && _ws->spdReady ? _ws->spdSInv : nullptr),
-                    (_ws && _ws->spdReady),
-                    _ws->sensB, _ws->sensG, _ws->sensR);
-
-                // Apply camera exposure explicitly to E to avoid hidden/no-op in table path.
-                {
-                    const float sExp = (std::isfinite(_exposureScale) ? std::max(0.0f, _exposureScale) : 1.0f);
-                    if (sExp != 1.0f) { E[0] *= sExp; E[1] *= sExp; E[2] *= sExp; }
-                }
-
-                float leB = std::log10(std::max(0.0f, E[0]) + 1e-10f) + _ws->logEOffB;
-                float leG = std::log10(std::max(0.0f, E[1]) + 1e-10f) + _ws->logEOffG;
-                float leR = std::log10(std::max(0.0f, E[2]) + 1e-10f) + _ws->logEOffR;
-
-                auto clamp_logE_to_curve = [](const Spectral::Curve& c, float le)->float {
-                    if (c.lambda_nm.empty()) return le;
-                    const float xmin = c.lambda_nm.front();
-                    const float xmax = c.lambda_nm.back();
-                    if (!std::isfinite(le)) return xmin;
-                    return std::min(std::max(le, xmin), xmax);
-                    };
-                leB = clamp_logE_to_curve(_ws->densB, leB);
-                leG = clamp_logE_to_curve(_ws->densG, leG);
-                leR = clamp_logE_to_curve(_ws->densR, leR);
-
-                logE_B[idx] = leB;
-                logE_G[idx] = leG;
-                logE_R[idx] = leR;
-
-                float D_Y = sample_density_at_logE_safe(_ws->densB, leB);
-                float D_M = sample_density_at_logE_safe(_ws->densG, leG);
-                float D_C = sample_density_at_logE_safe(_ws->densR, leR);
-
-                // Use the single, robust path (parity with agx)
-                float aCorr[3];
-                Couplers::ApplyInputLogE io{ { leB, leG, leR }, { D_Y, D_M, D_C } };
-                Couplers::compute_logE_corrections(io, _dirRT, aCorr);
-                for (float& v : aCorr) {
-                    if (!std::isfinite(v)) v = 0.0f;
-                }
-                aY[idx] = aCorr[0];
-                aM[idx] = aCorr[1];
-                aC[idx] = aCorr[2];
-            }
-        }
-
-        // Blur corrections
-        std::vector<float> k;
-        JuicerProc::buildGaussianKernel(_dirRT.spatialSigmaPixels, k);
-        std::vector<float> tmp, aY_blur, aM_blur, aC_blur;
-        JuicerProc::blurChannelSeparable(aY, tmp, aY_blur, tileW, tileH, k);
-        JuicerProc::blurChannelSeparable(aM, tmp, aM_blur, tileW, tileH, k);
-        JuicerProc::blurChannelSeparable(aC, tmp, aC_blur, tileW, tileH, k);
-
-        // NaN scrub and conservative clamp on blurred corrections
-        auto scrubClamp = [](std::vector<float>& v) {
-            for (float& t : v) {
-                if (!std::isfinite(t)) t = 0.0f;
-                // keep corrections within plausible design bounds
-                if (t < -10.0f) t = -10.0f;
-                if (t > 10.0f) t = 10.0f;
-            }
+    if (_dirRT.active && doSpatial && _nComponents >= 3 && _wsReady && _ws && curvesReady()) {
+        SpatialDIRWorkspace dirWorkspace;
+        auto fetchRGB = [&](int xx, int yy, float rgb[3])->bool {
+            const int x = procWindow.x1 + xx;
+            const int y = procWindow.y1 + yy;
+            const float* srcPix = reinterpret_cast<const float*>(_srcImg->getPixelAddress(x, y));
+            if (!srcPix) return false;
+            rgb[0] = srcPix[0];
+            rgb[1] = srcPix[1];
+            rgb[2] = srcPix[2];
+            return true;
         };
-        scrubClamp(aY_blur);
-        scrubClamp(aM_blur);
-        scrubClamp(aC_blur);
+        auto abortCheck = [&]() -> bool { return _effect.abort(); };
+        buildSpatialDIRCorrections(
+            tileW, tileH,
+            *_ws,
+            _dirRT,
+            _exposureScale,
+            fetchRGB,
+            abortCheck,
+            dirWorkspace);
 
         // Precompute spectral midgray factor once (AgX parity), constant across the tile.
         const float exposureCompScale = _printParams.exposureCompensationEnabled
@@ -460,9 +654,9 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 float rgbOut[3] = { rgbIn[0],  rgbIn[1],  rgbIn[2] };
 
                 const size_t idx = size_t(yy * tileW + xx);
-                float leB2 = logE_B[idx] - aY_blur[idx];
-                float leG2 = logE_G[idx] - aM_blur[idx];
-                float leR2 = logE_R[idx] - aC_blur[idx];
+                float leB2 = dirWorkspace.logE_B[idx] - dirWorkspace.corrYBlur[idx];
+                float leG2 = dirWorkspace.logE_G[idx] - dirWorkspace.corrMBlur[idx];
+                float leR2 = dirWorkspace.logE_R[idx] - dirWorkspace.corrCBlur[idx];
 
                 auto clamp_to = [](float le, const Spectral::Curve& c)->float {
                     if (c.lambda_nm.empty()) return le;
