@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -106,6 +107,18 @@ struct InstanceState {
     std::atomic<double> spatialSigmaFilmLongEdgeMm{ 0.0 };
     std::atomic<float> spatialSigmaMicrometers{ 0.0f };
     std::atomic<float> spatialSigmaPixelsCanonical{ 0.0f };
+
+    // Auto-exposure cache (per frame / build)
+    std::mutex autoExposureMutex;
+    bool autoExposureCacheValid = false;
+    double autoExposureCacheTime = std::numeric_limits<double>::quiet_NaN();
+    double autoExposureCacheTargetY = 0.184;
+    bool autoExposureCacheAutoEnabled = false;
+    uint64_t autoExposureCacheBuildCounter = 0;
+    OfxRectI autoExposureCacheBounds{ 0, 0, 0, 0 };
+    double autoExposureCacheEV = 0.0;
+    bool autoExposureCanonicalValid = false;
+    OfxRectI autoExposureCanonicalBounds{ 0, 0, 0, 0 };
 
     WorkingState* inactive() {
         WorkingState* a = activeWS.load(std::memory_order_acquire);

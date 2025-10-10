@@ -278,7 +278,36 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
 
     // --- Auto exposure compensation (camera) and print exposure compensation ---
     {
-        double autoEV = 0.0;
+        auto rect_equal = [](const OfxRectI& a, const OfxRectI& b) {
+            return a.x1 == b.x1 && a.y1 == b.y1 && a.x2 == b.x2 && a.y2 == b.y2;
+            };
+        auto nearly_equal_double = [](double a, double b) {
+            const double diff = std::fabs(a - b);
+            const double scale = std::max({ 1.0, std::fabs(a), std::fabs(b) });
+            return diff <= scale * 1e-9;
+            };
+
+        OfxRectI meterBounds = fullBounds;
+        if (_src) {
+            try {
+                const OfxRectD rod = _src->getRegionOfDefinition(args.time);
+                const double rodWidth = rod.x2 - rod.x1;
+                const double rodHeight = rod.y2 - rod.y1;
+                if (std::isfinite(rodWidth) && rodWidth > 0.0 &&
+                    std::isfinite(rodHeight) && rodHeight > 0.0) {
+                    meterBounds.x1 = static_cast<int>(std::floor(rod.x1));
+                    meterBounds.y1 = static_cast<int>(std::floor(rod.y1));
+                    meterBounds.x2 = static_cast<int>(std::ceil(rod.x2));
+                    meterBounds.y2 = static_cast<int>(std::ceil(rod.y2));
+                }
+            }
+            catch (...) {
+                // Ignore failures; fall back to full bounds.
+            }
+        }
+
+        const WorkingState* wsCur = (_state ? _state->activeWS.load(std::memory_order_acquire) : nullptr);
+        const uint64_t wsBuildCounter = wsCur ? wsCur->buildCounter : 0;
 
         // Center-weighted Y measurement (agx-emulsion): sigma ≈ 0.2, aspect-normalized, target Y=0.184
         auto measure_center_weighted_Y_DWG = [&](OFX::Image* img, const OfxRectI& bounds)->double {
@@ -298,47 +327,79 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
                 return std::exp(-r2 / (2.0 * sigma * sigma));
                 };
 
-            // Sum mask
+            
             double sumMask = 0.0;
-            for (int yy = bounds.y1; yy < bounds.y2; ++yy)
-                for (int xx = bounds.x1; xx < bounds.x2; ++xx)
-                    sumMask += maskAt(xx - bounds.x1, yy - bounds.y1);
-            if (sumMask <= 0.0) return 0.0;
-
-            // Accumulate Y using DWG→XYZ row 2 (exact DWG-linear luminance)
+            
             double sumY = 0.0;
             for (int yy = bounds.y1; yy < bounds.y2; ++yy) {
                 for (int xx = bounds.x1; xx < bounds.x2; ++xx) {
                     const float* pix = reinterpret_cast<const float*>(img->getPixelAddress(xx, yy));
                     if (!pix) continue;
+                    const double w = maskAt(xx - bounds.x1, yy - bounds.y1);
                     // Y = row 2 of DWG_RGB_to_XYZ dot rgb
                     const double Y = std::max(0.0,
                         (double)Spectral::gDWG_RGB_to_XYZ.m[3] * pix[0] +
                         (double)Spectral::gDWG_RGB_to_XYZ.m[4] * pix[1] +
                         (double)Spectral::gDWG_RGB_to_XYZ.m[5] * pix[2]);
-                    const double w = maskAt(xx - bounds.x1, yy - bounds.y1);
+                    sumMask += w;
                     sumY += Y * w;
                 }
             }
+            if (sumMask <= 0.0) return 0.0;
             return sumY / sumMask;
             };
 
-        // Camera auto exposure compensation: adjust scene EV to reach target Y=0.184
-        if (scannerParams.autoExposure) {            
-            const double Yexp = measure_center_weighted_Y_DWG(srcImg.get(), fullBounds);
-            // We will use ScannerTargetY as the target; fallback to 0.184 if invalid (agx parity).
-            double targetY = 0.184;
-            if (std::isfinite(scannerParams.targetY) && scannerParams.targetY > 0.0) {
-                targetY = static_cast<double>(scannerParams.targetY);
-            }
-            double evComp = 0.0;
-            if (Yexp > 0.0 && targetY > 0.0) {
-                const double exposureRatio = Yexp / targetY;
-                evComp = -std::log(exposureRatio) / std::log(2.0);
-            }
-            if (!std::isfinite(evComp)) evComp = 0.0;
-            autoEV = evComp;
+        double targetY = 0.184;
+        if (std::isfinite(scannerParams.targetY) && scannerParams.targetY > 0.0) {
+            targetY = static_cast<double>(scannerParams.targetY);
         }
+
+        double autoEV = 0.0;
+        bool haveCachedAutoEV = false;
+        if (_state) {
+            std::lock_guard<std::mutex> cacheLock(_state->autoExposureMutex);
+            if (_state->autoExposureCacheValid &&
+                _state->autoExposureCacheAutoEnabled == scannerParams.autoExposure &&
+                nearly_equal_double(_state->autoExposureCacheTargetY, targetY) &&
+                nearly_equal_double(_state->autoExposureCacheTime, args.time) &&
+                _state->autoExposureCacheBuildCounter == wsBuildCounter &&
+                rect_equal(_state->autoExposureCacheBounds, meterBounds)) {
+                autoEV = _state->autoExposureCacheEV;
+                haveCachedAutoEV = true;
+            }
+        }
+
+        if (!haveCachedAutoEV) {
+            bool measurementValid = !scannerParams.autoExposure;
+            double evComp = 0.0;
+            if (scannerParams.autoExposure) {
+                const double Yexp = measure_center_weighted_Y_DWG(srcImg.get(), meterBounds);
+                if (Yexp > 0.0 && targetY > 0.0) {
+                    const double exposureRatio = Yexp / targetY;
+                    evComp = -std::log(exposureRatio) / std::log(2.0);
+                    measurementValid = std::isfinite(evComp);
+                }
+                if (!std::isfinite(evComp)) {
+                    evComp = 0.0;
+                    measurementValid = false;
+                }
+            }            
+            autoEV = evComp;
+
+            if (_state) {
+                std::lock_guard<std::mutex> cacheLock(_state->autoExposureMutex);
+                _state->autoExposureCacheValid = measurementValid;
+                _state->autoExposureCacheTime = args.time;
+                _state->autoExposureCacheTargetY = targetY;
+                _state->autoExposureCacheAutoEnabled = scannerParams.autoExposure;
+                _state->autoExposureCacheBuildCounter = wsBuildCounter;
+                _state->autoExposureCacheBounds = meterBounds;
+                _state->autoExposureCacheEV = autoEV;
+                _state->autoExposureCanonicalBounds = meterBounds;
+                _state->autoExposureCanonicalValid = true;
+            }
+        }
+
         // Compose total camera EV (agx parity): autoEV + slider EV
         double sliderEV = std::isfinite(exposureSliderEV) ? exposureSliderEV : 0.0;
         const double totalEV = autoEV + sliderEV;
