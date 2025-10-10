@@ -295,13 +295,32 @@ namespace JuicerProc {
         const int H = srcBounds.y2 - srcBounds.y1;
         if (W <= 0 || H <= 0) return;
 
-        const bool useScanner = prm.bypass || !prt;
+        // Mirror JuicerEffect::render safeguards for print readiness.
+        const bool wsReady = (ws && ws->buildCounter > 0 &&
+            ws->tablesView.K == Spectral::gShape.K &&
+            ws->tablesView.epsY.size() == static_cast<size_t>(Spectral::gShape.K) &&
+            ws->tablesView.epsM.size() == static_cast<size_t>(Spectral::gShape.K) &&
+            ws->tablesView.epsC.size() == static_cast<size_t>(Spectral::gShape.K) &&
+            ws->baseMin.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&
+            !ws->densB.lambda_nm.empty() && !ws->densB.linear.empty() &&
+            !ws->densG.lambda_nm.empty() && !ws->densG.linear.empty() &&
+            !ws->densR.lambda_nm.empty() && !ws->densR.linear.empty());
+
+        const bool printRuntimeReady = (prt != nullptr) &&
+            Print::profile_is_valid(prt->profile) &&
+            prt->illumView.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&
+            prt->illumEnlarger.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&
+            (ws && ws->tablesPrint.K == Spectral::gShape.K);
+
+        const bool printReady = printRuntimeReady && wsReady;
+        const bool printPathActive = printReady && !prm.bypass;
+        const bool useScanner = !printPathActive;
         const bool curvesReady = curve_ok(ws->densB) && curve_ok(ws->densG) && curve_ok(ws->densR);
-        const bool doSpatial = (!useScanner) && dirRT.active && std::isfinite(dirRT.spatialSigmaPixels)
+        const bool doSpatial = printPathActive && dirRT.active && std::isfinite(dirRT.spatialSigmaPixels)
             && dirRT.spatialSigmaPixels > 0.5f && curvesReady;
         float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
         float kMid_spectral = 1.0f;
-        if (!useScanner && prt) {
+        if (printPathActive) {
             const float exposureCompScale = prm.exposureCompensationEnabled
                 ? prm.exposureCompensationScale
                 : 1.0f;
@@ -431,7 +450,7 @@ namespace JuicerProc {
                         scanPrm, dirRT, *ws,
                         exposureScale);
                 }
-                else if (haveSpatial && prt) {
+                else if (haveSpatial) {
                     float leB2 = previewSpatial.logE_B[idx] - previewSpatial.corrYBlur[idx];
                     float leG2 = previewSpatial.logE_G[idx] - previewSpatial.corrMBlur[idx];
                     float leR2 = previewSpatial.logE_R[idx] - previewSpatial.corrCBlur[idx];
@@ -542,7 +561,7 @@ namespace JuicerProc {
                             rgbOut);
                     }
                 }
-                else {                    
+                else if (printPathActive && prt) {
                     Print::simulate_print_pixel(
                         rgbIn, prm,
                         *prt, dirRT, *ws,
@@ -550,6 +569,12 @@ namespace JuicerProc {
                         kMid_spectral,
                         midgrayScale,
                         rgbOut);
+                }
+                else {
+                    Scanner::simulate_scanner(
+                        rgbIn, rgbOut,
+                        scanPrm, dirRT, *ws,
+                        exposureScale);
                 }
 
                 OutputEncoding::applyEncoding(outputEncoding, rgbOut);
