@@ -702,36 +702,37 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
 
                     if (tables) {
                         float XYZ[3] = { 0.0f, 0.0f, 0.0f };
-                        if (_ws->hasBaseline && tables->hasBaseline) {
+                        const bool useBaseline = _ws->hasBaseline && tables->hasBaseline;
+                        if (useBaseline) {
                             Spectral::dyes_to_XYZ_with_baseline_given_tables(*tables, D_cmy, XYZ);
                         }
                         else {
-                            Spectral::dyes_to_XYZ_given_tables(*tables, D_cmy, XYZ);
-                            const float exposureScaleSafe =
-                                (std::isfinite(_exposureScale) && _exposureScale > 0.0f)
-                                ? _exposureScale
-                                : 1.0f;
-                            const SpectralTables* tablesSPD =
-                                (_ws->spdReady && _ws->tablesRef.K > 0) ? &_ws->tablesRef : nullptr;
-                            const Spectral::Curve& sensB_forExposure =
-                                _ws->negSensB.linear.empty() ? _ws->sensB : _ws->negSensB;
-                            const Spectral::Curve& sensG_forExposure =
-                                _ws->negSensG.linear.empty() ? _ws->sensG : _ws->negSensG;
-                            const Spectral::Curve& sensR_forExposure =
-                                _ws->negSensR.linear.empty() ? _ws->sensR : _ws->negSensR;
-                            const float autoGain = Scanner::compute_auto_exposure_gain(
-                                _scannerParams,
-                                *_ws,
-                                *tables,
-                                tablesSPD,
-                                sensB_forExposure,
-                                sensG_forExposure,
-                                sensR_forExposure,
-                                exposureScaleSafe);
-                            XYZ[0] *= autoGain;
-                            XYZ[1] *= autoGain;
-                            XYZ[2] *= autoGain;
+                            Spectral::dyes_to_XYZ_given_tables(*tables, D_cmy, XYZ);                            
                         }
+                        const float exposureScaleSafe =
+                            (std::isfinite(_exposureScale) && _exposureScale > 0.0f)
+                            ? _exposureScale
+                            : 1.0f;
+                        const SpectralTables* tablesSPD =
+                            (_ws->spdReady && _ws->tablesRef.K > 0) ? &_ws->tablesRef : nullptr;
+                        const Spectral::Curve& sensB_forExposure =
+                            _ws->negSensB.linear.empty() ? _ws->sensB : _ws->negSensB;
+                        const Spectral::Curve& sensG_forExposure =
+                            _ws->negSensG.linear.empty() ? _ws->sensG : _ws->negSensG;
+                        const Spectral::Curve& sensR_forExposure =
+                            _ws->negSensR.linear.empty() ? _ws->sensR : _ws->negSensR;
+                        const float autoGain = Scanner::compute_auto_exposure_gain(
+                            _scannerParams,
+                            *_ws,
+                            *tables,
+                            tablesSPD,
+                            sensB_forExposure,
+                            sensG_forExposure,
+                            sensR_forExposure,
+                            exposureScaleSafe);
+                        XYZ[0] *= autoGain;
+                        XYZ[1] *= autoGain;
+                        XYZ[2] *= autoGain;
                         Spectral::XYZ_to_DWG_linear_adapted(*tables, XYZ, rgbOut);
                         rgbOut[0] = std::max(0.0f, rgbOut[0]);
                         rgbOut[1] = std::max(0.0f, rgbOut[1]);
