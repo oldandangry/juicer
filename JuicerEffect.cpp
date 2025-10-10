@@ -374,9 +374,26 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
             };
         double canonicalWidth = 0.0;
         double canonicalHeight = 0.0;
-        if (_src) {
-            canonicalWidth = static_cast<double>(_src->getCanonicalWidth());
-            canonicalHeight = static_cast<double>(_src->getCanonicalHeight());
+
+        const OfxPointD projectSize = getProjectSize();
+        if (valid_dim(projectSize.x) && valid_dim(projectSize.y)) {
+            canonicalWidth = projectSize.x;
+            canonicalHeight = projectSize.y;
+        }
+
+        if (_src && (!valid_dim(canonicalWidth) || !valid_dim(canonicalHeight))) {
+            try {
+                const OfxRectD rod = _src->getRegionOfDefinition(args.time);
+                const double rodWidth = rod.x2 - rod.x1;
+                const double rodHeight = rod.y2 - rod.y1;
+                if (valid_dim(rodWidth) && valid_dim(rodHeight)) {
+                    canonicalWidth = rodWidth;
+                    canonicalHeight = rodHeight;
+                }
+            }
+            catch (...) {
+                // Ignore failures; we'll fall back to image dimensions below.
+            }
         }
         if (!valid_dim(canonicalWidth) || !valid_dim(canonicalHeight)) {
             if (_state) {
