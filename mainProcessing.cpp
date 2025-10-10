@@ -189,6 +189,13 @@ namespace {
             return std::min(std::max(le, xmin), xmax);
             };
 
+        const Spectral::Curve& sensB_forExposure =
+            ws.negSensB.linear.empty() ? ws.sensB : ws.negSensB;
+        const Spectral::Curve& sensG_forExposure =
+            ws.negSensG.linear.empty() ? ws.sensG : ws.negSensG;
+        const Spectral::Curve& sensR_forExposure =
+            ws.negSensR.linear.empty() ? ws.sensR : ws.negSensR;
+
         // Pass A: sample exposures, convert to logE, compute DIR corrections per pixel.
         for (int yy = 0; yy < height; ++yy) {
             if (abortCheck()) break;
@@ -209,7 +216,9 @@ namespace {
                     tablesSPD,
                     (ws.spdReady ? ws.spdSInv : nullptr),
                     ws.spdReady,
-                    ws.sensB, ws.sensG, ws.sensR);
+                    sensB_forExposure,
+                    sensG_forExposure,
+                    sensR_forExposure);
 
                 const float sExp = (std::isfinite(exposureScale) ? std::max(0.0f, exposureScale) : 1.0f);
                 if (sExp != 1.0f) {
