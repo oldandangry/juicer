@@ -551,12 +551,18 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
     const WorkingState* ws = activeWorkingState;
     const Print::Runtime* prt = (ws && ws->buildCounter > 0 && ws->printRT) ? ws->printRT.get() : nullptr;
 
+    // Baseline spectra are optional for certain workflows (AgX parity requirement);
+    // guard them via hasBaseline so we do not regress into assuming every stock
+    // provides reconstructed baseline vectors.
+    const bool baselineReady = (!ws || !ws->hasBaseline) ||
+        (ws->baseMin.linear.size() == static_cast<size_t>(Spectral::gShape.K));
+
     const bool wsReady = (ws && ws->buildCounter > 0 &&
         ws->tablesView.K == Spectral::gShape.K &&
         ws->tablesView.epsY.size() == static_cast<size_t>(Spectral::gShape.K) &&
         ws->tablesView.epsM.size() == static_cast<size_t>(Spectral::gShape.K) &&
         ws->tablesView.epsC.size() == static_cast<size_t>(Spectral::gShape.K) &&
-        ws->baseMin.linear.size() == static_cast<size_t>(Spectral::gShape.K) &&
+        baselineReady &&
         !ws->densB.lambda_nm.empty() && !ws->densB.linear.empty() &&
         !ws->densG.lambda_nm.empty() && !ws->densG.linear.empty() &&
         !ws->densR.lambda_nm.empty() && !ws->densR.linear.empty());
