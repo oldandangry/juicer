@@ -189,12 +189,13 @@ namespace {
             return std::min(std::max(le, xmin), xmax);
             };
 
-        const Spectral::Curve& sensB_forExposure =
-            ws.negSensB.linear.empty() ? ws.sensB : ws.negSensB;
-        const Spectral::Curve& sensG_forExposure =
-            ws.negSensG.linear.empty() ? ws.sensG : ws.negSensG;
-        const Spectral::Curve& sensR_forExposure =
-            ws.negSensR.linear.empty() ? ws.sensR : ws.negSensR;
+        auto select_exposure_curve = [](const Spectral::Curve& neg, const Spectral::Curve& base)
+            -> const Spectral::Curve& {
+            return neg.linear.empty() ? base : neg;
+            };
+        const Spectral::Curve& sensB_forExposure = select_exposure_curve(ws.negSensB, ws.sensB);
+        const Spectral::Curve& sensG_forExposure = select_exposure_curve(ws.negSensG, ws.sensG);
+        const Spectral::Curve& sensR_forExposure = select_exposure_curve(ws.negSensR, ws.sensR);
 
         // Pass A: sample exposures, convert to logE, compute DIR corrections per pixel.
         for (int yy = 0; yy < height; ++yy) {
