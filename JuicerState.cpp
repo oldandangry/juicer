@@ -1014,6 +1014,8 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
     target->dMax[1] = dirRT.dMax[1];
     target->dMax[2] = dirRT.dMax[2];
 
+    S.spatialSigmaCacheValid.store(false, std::memory_order_release);
+
     {
         const WorkingState* prev = S.activeWS.load(std::memory_order_acquire);
         if (prev && prev->buildCounter > 0) {

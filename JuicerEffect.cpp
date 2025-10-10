@@ -369,22 +369,99 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
                 }
             }
         }
+        auto valid_dim = [](double v) -> bool {
+            return std::isfinite(v) && v > 0.0;
+            };
+        double canonicalWidth = 0.0;
+        double canonicalHeight = 0.0;
+        if (_src) {
+            canonicalWidth = static_cast<double>(_src->getCanonicalWidth());
+            canonicalHeight = static_cast<double>(_src->getCanonicalHeight());
+        }
+        if (!valid_dim(canonicalWidth) || !valid_dim(canonicalHeight)) {
+            if (_state) {
+                const double cachedW = _state->spatialSigmaCanonicalWidth.load(std::memory_order_acquire);
+                const double cachedH = _state->spatialSigmaCanonicalHeight.load(std::memory_order_acquire);
+                if (valid_dim(cachedW) && valid_dim(cachedH)) {
+                    canonicalWidth = cachedW;
+                    canonicalHeight = cachedH;
+                }
+            }
+        }
+        if (!valid_dim(canonicalWidth)) canonicalWidth = static_cast<double>(fullWidth);
+        if (!valid_dim(canonicalHeight)) canonicalHeight = static_cast<double>(fullHeight);
+
         const double filmLongEdgeMm =
             (std::isfinite(scannerParams.filmLongEdgeMm) && scannerParams.filmLongEdgeMm > 0.0f)
             ? static_cast<double>(scannerParams.filmLongEdgeMm)
             : 36.0;
-        const double widthPixels = static_cast<double>(fullWidth);
-        const double heightPixels = static_cast<double>(fullHeight);
-        dirRT.spatialSigmaPixels = Couplers::spatial_sigma_pixels_from_micrometers(
-            dirRT.spatialSigmaMicrometers,
-            filmLongEdgeMm,
-            widthPixels,
-            heightPixels);
-        // Cap spatial sigma to a sane maximum to avoid impractical kernels
-        if (!std::isfinite(dirRT.spatialSigmaPixels) || dirRT.spatialSigmaPixels < 0.0f)
+        float canonicalSigmaPixels = 0.0f;
+        const float sigmaMicrometers = dirRT.spatialSigmaMicrometers;
+        if (sigmaMicrometers > 0.0f && valid_dim(canonicalWidth) && valid_dim(canonicalHeight)) {
+            const auto nearly_equal_double = [](double a, double b) {
+                const double diff = std::fabs(a - b);
+                const double scale = std::max({ 1.0, std::fabs(a), std::fabs(b) });
+                return diff <= scale * 1e-9;
+                };
+            const auto nearly_equal_float = [](float a, float b) {
+                const float diff = std::fabs(a - b);
+                const float scale = std::max({ 1.0f, std::fabs(a), std::fabs(b) });
+                return diff <= scale * 1e-6f;
+                };
+
+            bool cacheHit = false;
+            if (_state) {
+                const bool cacheValid = _state->spatialSigmaCacheValid.load(std::memory_order_acquire);
+                if (cacheValid) {
+                    const float cachedMic = _state->spatialSigmaMicrometers.load(std::memory_order_relaxed);
+                    const double cachedW = _state->spatialSigmaCanonicalWidth.load(std::memory_order_relaxed);
+                    const double cachedH = _state->spatialSigmaCanonicalHeight.load(std::memory_order_relaxed);
+                    const double cachedFilm = _state->spatialSigmaFilmLongEdgeMm.load(std::memory_order_relaxed);
+                    const float cachedSigma = _state->spatialSigmaPixelsCanonical.load(std::memory_order_relaxed);
+                    if (nearly_equal_float(cachedMic, sigmaMicrometers) &&
+                        nearly_equal_double(cachedW, canonicalWidth) &&
+                        nearly_equal_double(cachedH, canonicalHeight) &&
+                        nearly_equal_double(cachedFilm, filmLongEdgeMm)) {
+                        canonicalSigmaPixels = cachedSigma;
+                        cacheHit = true;
+                    }
+                }
+            }
+
+            if (!cacheHit) {
+                canonicalSigmaPixels = Couplers::spatial_sigma_pixels_from_micrometers(
+                    sigmaMicrometers,
+                    filmLongEdgeMm,
+                    canonicalWidth,
+                    canonicalHeight);
+                if (_state) {
+                    _state->spatialSigmaCanonicalWidth.store(canonicalWidth, std::memory_order_release);
+                    _state->spatialSigmaCanonicalHeight.store(canonicalHeight, std::memory_order_release);
+                    _state->spatialSigmaFilmLongEdgeMm.store(filmLongEdgeMm, std::memory_order_release);
+                    _state->spatialSigmaMicrometers.store(sigmaMicrometers, std::memory_order_release);
+                    _state->spatialSigmaPixelsCanonical.store(canonicalSigmaPixels, std::memory_order_release);
+                    _state->spatialSigmaCacheValid.store(true, std::memory_order_release);
+                }
+            }
+
+            double scaleX = (std::isfinite(args.renderScale.x) && args.renderScale.x > 0.0)
+                ? args.renderScale.x
+                : 1.0;
+            double scaleY = (std::isfinite(args.renderScale.y) && args.renderScale.y > 0.0)
+                ? args.renderScale.y
+                : 1.0;
+            double renderScaleFactor = std::max(scaleX, scaleY);
+            if (!(std::isfinite(renderScaleFactor)) || renderScaleFactor <= 0.0) {
+                renderScaleFactor = 1.0;
+            }
+            float scaledSigma = canonicalSigmaPixels * static_cast<float>(renderScaleFactor);
+            if (!std::isfinite(scaledSigma) || scaledSigma < 0.0f) scaledSigma = 0.0f;
+            if (scaledSigma > 25.0f) scaledSigma = 25.0f;
+            dirRT.spatialSigmaPixels = scaledSigma;
+        }
+        else {
             dirRT.spatialSigmaPixels = 0.0f;
-        if (dirRT.spatialSigmaPixels > 25.0f)
-            dirRT.spatialSigmaPixels = 25.0f;
+        }
     }
 #else
     Couplers::Runtime dirRT{};

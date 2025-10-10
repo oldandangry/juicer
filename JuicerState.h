@@ -99,6 +99,14 @@ struct InstanceState {
     std::string dataDir;
     bool baseLoaded = false;
 
+    // Cache for DIR spatial sigma conversion (canonical project dimensions)
+    std::atomic<bool> spatialSigmaCacheValid{ false };
+    std::atomic<double> spatialSigmaCanonicalWidth{ 0.0 };
+    std::atomic<double> spatialSigmaCanonicalHeight{ 0.0 };
+    std::atomic<double> spatialSigmaFilmLongEdgeMm{ 0.0 };
+    std::atomic<float> spatialSigmaMicrometers{ 0.0f };
+    std::atomic<float> spatialSigmaPixelsCanonical{ 0.0f };
+
     WorkingState* inactive() {
         WorkingState* a = activeWS.load(std::memory_order_acquire);
         return (a == &workA) ? &workB : &workA;
