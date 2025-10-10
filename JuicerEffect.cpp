@@ -245,7 +245,7 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
     Print::Params printParams;
     {
         bool bypass = true;
-        double pexp = 1.0, preflash = 0.0, y = 1.0, m = 1.0;
+        double pexp = 1.0, preflash = 0.0, y = 0.0, m = 0.0; // Mirror setDefault(0.0) from parameter descriptors.
         if (_pPrintBypass)   _pPrintBypass->getValue(bypass);
         if (_pPrintExposure) _pPrintExposure->getValue(pexp);
         if (_pPrintPreflash) _pPrintPreflash->getValue(preflash);
