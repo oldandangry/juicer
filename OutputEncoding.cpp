@@ -80,6 +80,19 @@ namespace OutputEncoding {
             return v;
         }
 
+        inline float sanitizeSceneLinear(float v) {
+            return std::isfinite(v) ? v : 0.0f;
+        }
+
+        inline bool isSceneLinear(ColorSpace cs) {
+            switch (cs) {
+            case ColorSpace::ACES2065_1:
+                return true;
+            default:
+                return false;
+            }
+        }
+
         inline float encode_Rec709(float v) {
             const float signal = clamp01(v);
             constexpr float kGamma = 2.4f; // Inverse of ITU-R BT.1886 EOTF (gamma 2.4)
@@ -160,7 +173,7 @@ namespace OutputEncoding {
             case ColorSpace::ProPhotoRGB:
                 return encode_ProPhoto(v);
             case ColorSpace::ACES2065_1:
-                return clamp01(v);
+                return sanitizeSceneLinear(v);
             case ColorSpace::DaVinciWideGamutIntermediate:
                 return encode_DaVinciIntermediate(v);
             default:
@@ -234,10 +247,22 @@ namespace OutputEncoding {
             return;
         }
 
-        if (params.applyCctfEncoding && hasEncoding(params.colorSpace)) {
-            rgb[0] = applyEncodingChannel(params.colorSpace, converted[0]);
-            rgb[1] = applyEncodingChannel(params.colorSpace, converted[1]);
-            rgb[2] = applyEncodingChannel(params.colorSpace, converted[2]);
+        if (params.applyCctfEncoding) {
+            if (hasEncoding(params.colorSpace)) {
+                rgb[0] = applyEncodingChannel(params.colorSpace, converted[0]);
+                rgb[1] = applyEncodingChannel(params.colorSpace, converted[1]);
+                rgb[2] = applyEncodingChannel(params.colorSpace, converted[2]);
+            }
+            else if (isSceneLinear(params.colorSpace)) {
+                rgb[0] = sanitizeSceneLinear(converted[0]);
+                rgb[1] = sanitizeSceneLinear(converted[1]);
+                rgb[2] = sanitizeSceneLinear(converted[2]);
+            }
+            else {
+                rgb[0] = clamp01(converted[0]);
+                rgb[1] = clamp01(converted[1]);
+                rgb[2] = clamp01(converted[2]);
+            }
         }
         else {
             rgb[0] = clamp01(converted[0]);
