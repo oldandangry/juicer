@@ -194,6 +194,7 @@
     <ClInclude Include="ParamNames.h" />
     <ClInclude Include="Print.h" />
     <ClInclude Include="ProfileJSONLoader.h" />
+    <ClInclude Include="RebuildWorkingStateInternals.h" />
     <ClInclude Include="Scanner.h" />
     <ClInclude Include="SpectralMath.h" />
     <ClInclude Include="SpectralTables.h" />

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include "SpectralTables.h"
 #include "SpectralMath.h"   // for Spectral::Curve
 #include "Couplers.h"

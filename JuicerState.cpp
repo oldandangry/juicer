@@ -1,6 +1,7 @@
 #include "JuicerState.h"
 
 #include "LogExposureOffsets.h"
+#include "RebuildWorkingStateInternals.h"
 
 #include <algorithm>
 #include <array>
@@ -1017,34 +1018,20 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
     S.spatialSigmaCacheValid.store(false, std::memory_order_release);
 
     {
-        const WorkingState* prev = S.activeWS.load(std::memory_order_acquire);
-        if (prev && prev->buildCounter > 0) {
-            const bool sameCouplers =
-                (prev->dirRT.highShift == target->dirRT.highShift) &&
-                (prev->dirRT.M[0][0] == target->dirRT.M[0][0]) &&
-                (prev->dirRT.M[0][1] == target->dirRT.M[0][1]) &&
-                (prev->dirRT.M[0][2] == target->dirRT.M[0][2]) &&
-                (prev->dirRT.M[1][0] == target->dirRT.M[1][0]) &&
-                (prev->dirRT.M[1][1] == target->dirRT.M[1][1]) &&
-                (prev->dirRT.M[1][2] == target->dirRT.M[1][2]) &&
-                (prev->dirRT.M[2][0] == target->dirRT.M[2][0]) &&
-                (prev->dirRT.M[2][1] == target->dirRT.M[2][1]) &&
-                (prev->dirRT.M[2][2] == target->dirRT.M[2][2]) &&
-                (prev->dirRT.spatialSigmaMicrometers == target->dirRT.spatialSigmaMicrometers) &&
-                (prev->dirRT.spatialSigmaPixels == target->dirRT.spatialSigmaPixels);
+        RebuildWorkingState::NegativeReuseContext reuseCtx;
+        reuseCtx.activeBuildCounter = S.activeBuildCounter;
+        reuseCtx.lastHash = S.lastHash;
+        reuseCtx.lastFilmStock = S.lastParams.filmStockIndex;
+        reuseCtx.lastViewIll = S.lastParams.viewIll;
+        reuseCtx.lastEnlargerIll = S.lastParams.enlIll;
 
-            if (sameCouplers && prev->dirPrecorrected == target->dirPrecorrected) {
-                target->densB = prev->densB;
-                target->densG = prev->densG;
-                target->densR = prev->densR;
-                target->dMax[0] = prev->dMax[0];
-                target->dMax[1] = prev->dMax[1];
-                target->dMax[2] = prev->dMax[2];
-                target->dirRT.dMax[0] = prev->dirRT.dMax[0];
-                target->dirRT.dMax[1] = prev->dirRT.dMax[1];
-                target->dirRT.dMax[2] = prev->dirRT.dMax[2];
-                target->negParams = prev->negParams;
-            }
+        const WorkingState* prev = S.activeWS.load(std::memory_order_acquire);
+        if (RebuildWorkingState::can_reuse_negative_params(
+            reuseCtx, prev, *target, P.filmStockIndex, P.viewIll, P.enlIll)) {
+            // Only reuse metadata that is guaranteed to be identical. Density
+            // curves and dMax are left untouched so freshly computed values stay
+            // active after rebuilds (agx-emulsion parity for stock/illuminant swaps).
+            target->negParams = prev->negParams;
         }
     }
 

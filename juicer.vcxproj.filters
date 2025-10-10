@@ -122,5 +122,8 @@
     <ClInclude Include="LogExposureOffsets.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="RebuildWorkingStateInternals.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
