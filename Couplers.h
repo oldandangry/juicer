@@ -35,6 +35,11 @@ namespace Couplers {
 
     // Optional parity helpers used by the print/scanner paths
     struct ApplyInputLogE { float logE[3]; float D[3]; };
+    inline void compute_logE_corrections(const ApplyInputLogE&, const Runtime&, float a_out[3]) {
+        if (a_out) {
+            a_out[0] = a_out[1] = a_out[2] = 0.0f;
+        }
+    }
     inline void apply_runtime_logE(ApplyInputLogE&, const Runtime&) {}
     inline void apply_runtime_logE_with_curves(
         ApplyInputLogE&, const Runtime&,
