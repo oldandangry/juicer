@@ -76,6 +76,28 @@ struct ParamSnapshot {
     double spatialSigmaMicrometers = 0.0;
 };
 
+constexpr int kFactoryCouplersActive = 1;
+constexpr double kFactoryCouplersAmount = 1.0;
+constexpr double kFactoryCouplersRatioR = 0.7;
+constexpr double kFactoryCouplersRatioG = 0.7;
+constexpr double kFactoryCouplersRatioB = 0.5;
+constexpr double kFactoryCouplersSigma = 1.0;
+constexpr double kFactoryCouplersHigh = 0.0;
+constexpr double kFactoryCouplersSpatialSigma = 0.0;
+
+uint64_t hash_params(const ParamSnapshot& p);
+
+struct CouplerDirtyFlags {
+    bool active = false;
+    bool amount = false;
+    bool ratioR = false;
+    bool ratioG = false;
+    bool ratioB = false;
+    bool sigma = false;
+    bool high = false;
+    bool spatialSigma = false;
+};
+
 uint64_t hash_params(const ParamSnapshot& p);
 
 struct InstanceState {
@@ -99,6 +121,8 @@ struct InstanceState {
 
     std::string dataDir;
     bool baseLoaded = false;
+
+    CouplerDirtyFlags couplerDirty;
 
     // Cache for DIR spatial sigma conversion (canonical project dimensions)
     std::atomic<bool> spatialSigmaCacheValid{ false };

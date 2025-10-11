@@ -118,6 +118,9 @@ namespace {
             return false;
         }
     }
+    inline bool approx_equal(double a, double b, double eps = 1e-6) {
+        return std::fabs(a - b) <= eps;
+    }
 }
 
 uint64_t hash_params(const ParamSnapshot& p) {
@@ -573,9 +576,59 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
     sanitize_curve(densG);
     sanitize_curve(densR);
 
+    const Profiles::DirCouplersProfile& dirCfg = S.base.dirCouplers;
+
+    int effectiveCouplersActive = P.couplersActive;
+    double effectiveCouplersAmount = P.couplersAmount;
+    double effectiveRatioB = P.ratioB;
+    double effectiveRatioG = P.ratioG;
+    double effectiveRatioR = P.ratioR;
+    double effectiveCouplersSigma = P.sigma;
+    double effectiveCouplersHigh = P.high;
+    double effectiveSpatialSigma = P.spatialSigmaMicrometers;
+
+#ifdef JUICER_ENABLE_COUPLERS
+    if (dirCfg.hasData) {
+        auto sanitize_profile = [](float value, double fallback, double lo, double hi) -> double {
+            double v = static_cast<double>(value);
+            if (!std::isfinite(v)) {
+                return fallback;
+            }
+            if (v < lo) v = lo;
+            if (v > hi) v = hi;
+            return v;
+            };
+
+        if (!S.couplerDirty.active && effectiveCouplersActive == kFactoryCouplersActive) {
+            effectiveCouplersActive = dirCfg.active ? 1 : 0;
+        }
+        if (!S.couplerDirty.amount && approx_equal(effectiveCouplersAmount, kFactoryCouplersAmount)) {
+            effectiveCouplersAmount = sanitize_profile(dirCfg.amount, effectiveCouplersAmount, 0.0, 2.0);
+        }
+        if (!S.couplerDirty.ratioB && approx_equal(effectiveRatioB, kFactoryCouplersRatioB)) {
+            effectiveRatioB = sanitize_profile(dirCfg.ratioRGB[0], effectiveRatioB, 0.0, 1.0);
+        }
+        if (!S.couplerDirty.ratioG && approx_equal(effectiveRatioG, kFactoryCouplersRatioG)) {
+            effectiveRatioG = sanitize_profile(dirCfg.ratioRGB[1], effectiveRatioG, 0.0, 1.0);
+        }
+        if (!S.couplerDirty.ratioR && approx_equal(effectiveRatioR, kFactoryCouplersRatioR)) {
+            effectiveRatioR = sanitize_profile(dirCfg.ratioRGB[2], effectiveRatioR, 0.0, 1.0);
+        }
+        if (!S.couplerDirty.sigma && approx_equal(effectiveCouplersSigma, kFactoryCouplersSigma)) {
+            effectiveCouplersSigma = sanitize_profile(dirCfg.diffusionInterlayer, effectiveCouplersSigma, 0.0, 3.0);
+        }
+        if (!S.couplerDirty.high && approx_equal(effectiveCouplersHigh, kFactoryCouplersHigh)) {
+            effectiveCouplersHigh = sanitize_profile(dirCfg.highExposureShift, effectiveCouplersHigh, 0.0, 1.0);
+        }
+        if (!S.couplerDirty.spatialSigma && approx_equal(effectiveSpatialSigma, kFactoryCouplersSpatialSigma)) {
+            effectiveSpatialSigma = sanitize_profile(dirCfg.diffusionSizeUm, effectiveSpatialSigma, 0.0, 50.0);
+        }
+    }
+#endif
+
     bool precorrectApplied = false;
     Couplers::Runtime dirRT{};
-    dirRT.active = (P.couplersActive != 0);
+    dirRT.active = (effectiveCouplersActive != 0);
     {
         auto clampRatio = [](double v) -> float {
             if (!std::isfinite(v) || v < 0.0) return 0.0f;
@@ -587,15 +640,58 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
             if (v > 2.0) return 2.0f;
             return static_cast<float>(v);
             };
-        const float amountScale = clampAmount(P.couplersAmount);
+        const float amountScale = clampAmount(effectiveCouplersAmount);
         const float amount[3] = {
-            amountScale * clampRatio(P.ratioB),
-            amountScale * clampRatio(P.ratioG),
-            amountScale * clampRatio(P.ratioR)
+            amountScale* clampRatio(effectiveRatioB),
+            amountScale* clampRatio(effectiveRatioG),
+            amountScale* clampRatio(effectiveRatioR)
         };
-        Couplers::build_dir_matrix(dirRT.M, amount, static_cast<float>(P.sigma));
-        dirRT.highShift = static_cast<float>(P.high);
-        dirRT.spatialSigmaMicrometers = static_cast<float>(P.spatialSigmaMicrometers);
+#ifdef JUICER_ENABLE_COUPLERS
+        Couplers::build_dir_matrix(dirRT.M, amount, static_cast<float>(effectiveCouplersSigma));
+#else
+        auto build_dir_matrix_stub = [](float M[3][3], const float amountValues[3], float layerSigma) {
+            const float sigma = std::isfinite(layerSigma) ? std::max(0.0f, layerSigma) : 0.0f;
+            float amt[3] = { amountValues[0], amountValues[1], amountValues[2] };
+            const float sigmaCapped = std::min(sigma, 3.0f);
+            for (int i = 0; i < 3; ++i) {
+                if (!std::isfinite(amt[i])) amt[i] = 0.0f;
+                amt[i] = std::clamp(amt[i], 0.0f, 1.0f);
+            }
+            auto gauss = [sigmaCapped](int dx) -> float {
+                if (sigmaCapped <= 0.0f) {
+                    return (dx == 0) ? 1.0f : 0.0f;
+                }
+                const float s2 = sigmaCapped * sigmaCapped;
+                return std::exp(-0.5f * (dx * dx) / s2);
+                };
+            for (int r = 0; r < 3; ++r) {
+                float row[3];
+                float wsum = 0.0f;
+                for (int c = 0; c < 3; ++c) {
+                    row[c] = gauss(c - r);
+                    wsum += row[c];
+                }
+                if (wsum > 0.0f) {
+                    for (int c = 0; c < 3; ++c) {
+                        row[c] /= wsum;
+                    }
+                }
+                for (int c = 0; c < 3; ++c) {
+                    M[r][c] = amt[r] * row[c];
+                }
+            }
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    if (!std::isfinite(M[r][c])) {
+                        M[r][c] = 0.0f;
+                    }
+                }
+            }
+        };
+        build_dir_matrix_stub(dirRT.M, amount, static_cast<float>(effectiveCouplersSigma));
+#endif
+        dirRT.highShift = static_cast<float>(effectiveCouplersHigh);
+        dirRT.spatialSigmaMicrometers = static_cast<float>(effectiveSpatialSigma);
         dirRT.spatialSigmaPixels = 0.0f;
 
         if (dirRT.active && P.couplersPrecorrect) {
@@ -679,7 +775,7 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
         {
             std::ostringstream oss;
             oss << "DIR active=" << (dirRT.active ? 1 : 0)
-                << " sigma=" << static_cast<float>(P.sigma) << " high=" << static_cast<float>(P.high)
+                << " sigma=" << static_cast<float>(effectiveCouplersSigma) << " high=" << static_cast<float>(effectiveCouplersHigh)
                 << " dMax=" << dirRT.dMax[0] << "," << dirRT.dMax[1] << "," << dirRT.dMax[2]
                 << " precorrect=" << (P.couplersPrecorrect ? 1 : 0);
             JTRACE("BUILD", oss.str());
@@ -710,8 +806,7 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
         negParams.baseM = baseCoeffs[1];
         negParams.baseC = baseCoeffs[2];
     }
-
-    const Profiles::DirCouplersProfile& dirCfg = S.base.dirCouplers;
+    
     if (dirCfg.hasData) {
         auto computeK = [&](int idx) -> float {
             float amount = std::isfinite(dirCfg.amount) ? dirCfg.amount : 1.0f;

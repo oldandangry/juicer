@@ -731,6 +731,9 @@ void JuicerEffect::bootstrap_after_attach() {
     _state->baseLoaded = load_film_stock_into_base(stockDir, *_state);
 
     if (_state->baseLoaded) {
+#ifdef JUICER_ENABLE_COUPLERS
+        applyCouplerProfileDefaults(P);
+#endif
         rebuild_working_state(this->getHandle(), *_state, P);
         _state->lastParams = P;
         _state->lastHash = hash_params(P);
@@ -807,6 +810,98 @@ void JuicerEffect::applyNeutralFilters(const ParamSnapshot& P, bool resetFilterP
     }
 }
 
+#ifdef JUICER_ENABLE_COUPLERS
+void JuicerEffect::applyCouplerProfileDefaults(ParamSnapshot& P) {
+    if (!_state) {
+        return;
+    }
+
+    const Profiles::DirCouplersProfile& dirCfg = _state->base.dirCouplers;
+    if (!dirCfg.hasData) {
+        return;
+    }
+
+    auto sanitize_range = [](float value, double fallback, double lo, double hi) -> double {
+        double v = static_cast<double>(value);
+        if (!std::isfinite(v)) {
+            return fallback;
+        }
+        if (v < lo) v = lo;
+        if (v > hi) v = hi;
+        return v;
+        };
+
+    const bool wasSuppressed = _state->suppressParamEvents;
+    _state->suppressParamEvents = true;
+
+    if (!_state->couplerDirty.active) {
+        const bool active = dirCfg.active;
+        if (_pCouplersActive) {
+            _pCouplersActive->setValue(active);
+        }
+        P.couplersActive = active ? 1 : 0;
+    }
+
+    if (!_state->couplerDirty.amount) {
+        const double amount = sanitize_range(dirCfg.amount, P.couplersAmount, 0.0, 2.0);
+        if (_pCouplersAmount) {
+            _pCouplersAmount->setValue(amount);
+        }
+        P.couplersAmount = amount;
+    }
+
+    if (!_state->couplerDirty.ratioB) {
+        const double ratioB = sanitize_range(dirCfg.ratioRGB[0], P.ratioB, 0.0, 1.0);
+        if (_pCouplersAmountB) {
+            _pCouplersAmountB->setValue(ratioB);
+        }
+        P.ratioB = ratioB;
+    }
+
+    if (!_state->couplerDirty.ratioG) {
+        const double ratioG = sanitize_range(dirCfg.ratioRGB[1], P.ratioG, 0.0, 1.0);
+        if (_pCouplersAmountG) {
+            _pCouplersAmountG->setValue(ratioG);
+        }
+        P.ratioG = ratioG;
+    }
+
+    if (!_state->couplerDirty.ratioR) {
+        const double ratioR = sanitize_range(dirCfg.ratioRGB[2], P.ratioR, 0.0, 1.0);
+        if (_pCouplersAmountR) {
+            _pCouplersAmountR->setValue(ratioR);
+        }
+        P.ratioR = ratioR;
+    }
+
+    if (!_state->couplerDirty.sigma) {
+        const double sigma = sanitize_range(dirCfg.diffusionInterlayer, P.sigma, 0.0, 3.0);
+        if (_pCouplersSigma) {
+            _pCouplersSigma->setValue(sigma);
+        }
+        P.sigma = sigma;
+    }
+
+    if (!_state->couplerDirty.high) {
+        const double high = sanitize_range(dirCfg.highExposureShift, P.high, 0.0, 1.0);
+        if (_pCouplersHigh) {
+            _pCouplersHigh->setValue(high);
+        }
+        P.high = high;
+    }
+
+    if (!_state->couplerDirty.spatialSigma) {
+        const double spatial = sanitize_range(dirCfg.diffusionSizeUm, P.spatialSigmaMicrometers, 0.0, 50.0);
+        if (_pCouplersSpatialSigma) {
+            _pCouplersSpatialSigma->setValue(spatial);
+        }
+        P.spatialSigmaMicrometers = spatial;
+    }
+
+    _state->suppressParamEvents = wasSuppressed;
+}
+#endif
+
 void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
     if (!_state) return;
     // Suppress re-entrant param handling while programmatic changes are in flight
@@ -821,7 +916,34 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
     }
 
     ParamSnapshot P = snapshotParams();
-    const uint64_t h = hash_params(P);
+#ifdef JUICER_ENABLE_COUPLERS
+    if (changedNameOrNull) {
+        if (std::strcmp(changedNameOrNull, Couplers::kParamCouplersActive) == 0) {
+            _state->couplerDirty.active = true;
+        }
+        else if (std::strcmp(changedNameOrNull, Couplers::kParamCouplersAmount) == 0) {
+            _state->couplerDirty.amount = true;
+        }
+        else if (std::strcmp(changedNameOrNull, Couplers::kParamCouplersAmountB) == 0) {
+            _state->couplerDirty.ratioB = true;
+        }
+        else if (std::strcmp(changedNameOrNull, Couplers::kParamCouplersAmountG) == 0) {
+            _state->couplerDirty.ratioG = true;
+        }
+        else if (std::strcmp(changedNameOrNull, Couplers::kParamCouplersAmountR) == 0) {
+            _state->couplerDirty.ratioR = true;
+        }
+        else if (std::strcmp(changedNameOrNull, Couplers::kParamCouplersLayerSigma) == 0) {
+            _state->couplerDirty.sigma = true;
+        }
+        else if (std::strcmp(changedNameOrNull, Couplers::kParamCouplersHighExpShift) == 0) {
+            _state->couplerDirty.high = true;
+        }
+        else if (std::strcmp(changedNameOrNull, Couplers::kParamCouplersSpatialSigma) == 0) {
+            _state->couplerDirty.spatialSigma = true;
+        }
+    }
+#endif
 
     // Reload print profile if print paper changed
     if (changedNameOrNull && std::strcmp(changedNameOrNull, kParamPrintPaper) == 0) {
@@ -871,6 +993,13 @@ void JuicerEffect::onParamsPossiblyChanged(const char* changedNameOrNull) {
     }
 
     // Rebuild if any effective param changed
+    if (_state->baseLoaded) {
+#ifdef JUICER_ENABLE_COUPLERS
+        applyCouplerProfileDefaults(P);
+#endif
+    }
+
+    const uint64_t h = hash_params(P);
     if (_state->baseLoaded && h != _state->lastHash) {
         rebuild_working_state(this->getHandle(), *_state, P);
         _state->lastParams = P;

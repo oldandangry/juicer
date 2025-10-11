@@ -47,6 +47,9 @@ private:
     void onParamsPossiblyChanged(const char* changedNameOrNull);
     void bootstrap_after_attach();
     void applyNeutralFilters(const ParamSnapshot& P, bool resetFilterParams, bool ensureExposureComp);
+#ifdef JUICER_ENABLE_COUPLERS
+    void applyCouplerProfileDefaults(ParamSnapshot& P);
+#endif
 
     OFX::Clip* _src = nullptr;
     OFX::Clip* _dst = nullptr;
