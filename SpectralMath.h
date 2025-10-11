@@ -1553,6 +1553,9 @@ namespace Spectral {
         // 3x3 masking matrix applied to [dY0, dM0, dC0] (post H-D)
         // Row-major: [ YY YM YC; MY MM MC; CY CM CC ]
         float mask[9];
+        // Per-channel spectral masking adjustments (multiplicative + subtractive)
+        float maskScale[3];
+        float maskOffset[3];
     };
 
     // Default prototype negative (placeholder values; tune later)
@@ -1567,7 +1570,10 @@ namespace Spectral {
         // Masking (small off-diagonals; close to your current values)
          0.98f, -0.06f, -0.02f,
         -0.03f,  0.98f, -0.05f,
-        -0.02f, -0.04f,  0.98f
+        -0.02f, -0.04f,  0.98f,
+        // Spectral masking defaults
+        { 1.0f, 1.0f, 1.0f },
+        { 0.0f, 0.0f, 0.0f }
         };
     }
 
@@ -1828,11 +1834,35 @@ namespace Spectral {
     }
 
     // -------------------------------------------------------------------------
-    // Masking coupler matrix 
+    // Masking coupler matrix
     // -------------------------------------------------------------------------
-    inline void applyMaskingCoupler(const float E[3], float D[3]) {        
+    inline void apply_masking_adjustments_with_params(const NegativeCouplerParams& negParams, float D[3]) {
+        for (int i = 0; i < 3; ++i) {
+            float scale = (i < 3) ? negParams.maskScale[i] : 1.0f;
+            if (!std::isfinite(scale) || scale <= 0.0f) {
+                scale = 1.0f;
+            }
+            float offset = (i < 3) ? negParams.maskOffset[i] : 0.0f;
+            if (!std::isfinite(offset) || offset < 0.0f) {
+                offset = 0.0f;
+            }
+            float v = D[i] * scale - offset;
+            if (!std::isfinite(v) || v < 0.0f) {
+                v = 0.0f;
+            }
+            D[i] = v;
+        }
+    }
+
+    inline void apply_masking_adjustments(float D[3]) {
+        const NegativeCouplerParams negParams = get_neg_params();
+        apply_masking_adjustments_with_params(negParams, D);
+    }
+
+    inline void applyMaskingCoupler(const float E[3], float D[3]) {
         const NegativeCouplerParams negParams = get_neg_params();
         exposures_to_dyes_with_params(E, D, negParams);
+        apply_masking_adjustments_with_params(negParams, D);
         const float* M = negParams.mask;
         const float y = M[0] * D[0] + M[1] * D[1] + M[2] * D[2] + negParams.baseY;
         const float m = M[3] * D[0] + M[4] * D[1] + M[5] * D[2] + negParams.baseM;
@@ -2046,15 +2076,6 @@ namespace Spectral {
             gDWG_RGB_to_XYZ.m[5] * rgbDWG[2]);
         const float w = Y / 0.18f;
         return std::clamp(w, 0.0f, 1.0f);
-    }
-
-    // -------------------------------------------------------------------------
-    // NEW: Convenience function to go DWG RGB -> dye densities with sensitivity gains
-    // -------------------------------------------------------------------------
-    inline void dwgRGB_to_dyes(const float rgbDWG[3], float exposureScale, float D[3]) {
-        float E[3];
-        rgbDWG_to_layerExposures(rgbDWG, E, exposureScale);
-        applyMaskingCoupler(E, D);
-    }
+    }    
 
 } // namespace Spectral

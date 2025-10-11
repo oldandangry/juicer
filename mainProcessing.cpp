@@ -344,6 +344,13 @@ namespace {
                 float D_Y = sample_density_at_logE_safe(ws.densB, leB);
                 float D_M = sample_density_at_logE_safe(ws.densG, leG);
                 float D_C = sample_density_at_logE_safe(ws.densR, leR);
+                {
+                    float D_tmp[3] = { D_Y, D_M, D_C };
+                    Spectral::apply_masking_adjustments_with_params(ws.negParams, D_tmp);
+                    D_Y = D_tmp[0];
+                    D_M = D_tmp[1];
+                    D_C = D_tmp[2];
+                }
 
                 float aCorr[3];
                 Couplers::ApplyInputLogE io{ { leB, leG, leR }, { D_Y, D_M, D_C } };
@@ -573,6 +580,7 @@ namespace JuicerProc {
                     D_cmy[0] = sample_density_at_logE_safe(ws->densB, leB2);
                     D_cmy[1] = sample_density_at_logE_safe(ws->densG, leG2);
                     D_cmy[2] = sample_density_at_logE_safe(ws->densR, leR2);
+                    Spectral::apply_masking_adjustments_with_params(ws->negParams, D_cmy);
 
                     for (int i = 0; i < 3; ++i) {
                         float v = D_cmy[i];
@@ -747,6 +755,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 D_cmy[0] = sample_density_at_logE_safe(_ws->densB, leB2);
                 D_cmy[1] = sample_density_at_logE_safe(_ws->densG, leG2);
                 D_cmy[2] = sample_density_at_logE_safe(_ws->densR, leR2);
+                Spectral::apply_masking_adjustments_with_params(_ws->negParams, D_cmy);
 
                 // NaN scrub on sampled densities (non-negative, finite)
                 for (int i = 0; i < 3; ++i) {

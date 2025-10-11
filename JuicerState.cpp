@@ -10,6 +10,7 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -786,26 +787,97 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
         build_dir_matrix_local(dirMatrix, amountRGB, dirCfg.hasData ? dirCfg.diffusionInterlayer : 0.0f);
 #endif
 
-        std::array<float, 3> gaussianSum{ 0.0f, 0.0f, 0.0f };
+        std::array<float, 3> maskScaleCh{ {1.0f, 1.0f, 1.0f} };
+        std::array<float, 3> maskOffsetCh{ {0.0f, 0.0f, 0.0f} };
         if (hasMaskingData) {
+            const auto& maskProfile = S.base.maskingCouplers;
+            const auto& lambda = Spectral::gShape.wavelengths;
+            const size_t K = lambda.size();
+            const Spectral::Curve* epsCurves[3] = { &S.base.epsY, &S.base.epsM, &S.base.epsC };
+            const float effectiveness = 1.0f;
             for (int ch = 0; ch < 3; ++ch) {
-                const auto& channel = S.base.maskingCouplers.gaussianModel[ch];
-                for (const auto& tri : channel) {
-                    float amp = tri[2];
-                    if (!std::isfinite(amp)) amp = 0.0f;
-                    gaussianSum[ch] += std::fabs(amp);
+                const Spectral::Curve* eps = epsCurves[ch];
+                if (!eps || eps->linear.size() != K || K == 0) {
+                    continue;
+                }
+                const float cross = (maskProfile.crossOverPoints.size() > static_cast<size_t>(ch))
+                    ? maskProfile.crossOverPoints[ch]
+                    : std::numeric_limits<float>::quiet_NaN();
+                const float widthRaw = (maskProfile.transitionWidths.size() > static_cast<size_t>(ch))
+                    ? maskProfile.transitionWidths[ch]
+                    : std::numeric_limits<float>::quiet_NaN();
+                const float width = (std::isfinite(widthRaw) && std::fabs(widthRaw) > 1e-6f)
+                    ? std::fabs(widthRaw)
+                    : std::numeric_limits<float>::quiet_NaN();
+
+                double weightSum = 0.0;
+                double scaleSum = 0.0;
+                double offsetSum = 0.0;
+                for (size_t i = 0; i < K; ++i) {
+                    const float weight = eps->linear[i];
+                    if (!std::isfinite(weight) || weight <= 0.0f) {
+                        continue;
+                    }
+                    const float lambda_nm = lambda[i];
+                    float scaleSpectral = 1.0f;
+                    if (std::isfinite(cross) && std::isfinite(width)) {
+                        const float t = (lambda_nm - cross) / width;
+                        scaleSpectral = (std::erf(t) + 1.0f + effectiveness) / (2.0f + effectiveness);
+                    }
+                    double gaussSpectral = 0.0;
+                    const auto& gaussians = maskProfile.gaussianModel[ch];
+                    for (const auto& tri : gaussians) {
+                        float mu = tri[0];
+                        float sigma = tri[1];
+                        float amp = tri[2];
+                        if (!std::isfinite(mu) || !std::isfinite(sigma) || !std::isfinite(amp)) {
+                            continue;
+                        }
+                        sigma = std::fabs(sigma);
+                        if (sigma <= 1e-6f) {
+                            continue;
+                        }
+                        const float s = (lambda_nm - mu) / sigma;
+                        gaussSpectral += static_cast<double>(amp) * std::exp(-0.5 * static_cast<double>(s) * static_cast<double>(s));
+                    }
+                    weightSum += static_cast<double>(weight);
+                    scaleSum += static_cast<double>(weight) * static_cast<double>(scaleSpectral);
+                    offsetSum += static_cast<double>(weight) * gaussSpectral;
+                }
+                if (weightSum > 0.0) {
+                    float scaleAvg = static_cast<float>(scaleSum / weightSum);
+                    float offsetAvg = static_cast<float>(offsetSum / weightSum);
+                    if (!std::isfinite(scaleAvg) || scaleAvg <= 0.0f) {
+                        scaleAvg = 1.0f;
+                    }
+                    if (!std::isfinite(offsetAvg) || offsetAvg < 0.0f) {
+                        offsetAvg = 0.0f;
+                    }
+                    maskScaleCh[ch] = scaleAvg;
+                    maskOffsetCh[ch] = offsetAvg;
                 }
             }
+        }
+
+        for (int i = 0; i < 3; ++i) {
+            float scale = maskScaleCh[i];
+            if (!std::isfinite(scale) || scale <= 0.0f) scale = 1.0f;
+            float offset = maskOffsetCh[i];
+            if (!std::isfinite(offset) || offset < 0.0f) offset = 0.0f;
+            negParams.maskScale[i] = scale;
+            negParams.maskOffset[i] = offset;
         }
 
         const float maskScaleBase = 0.25f;
         const float maskScaleOffset = hasMaskingData ? 0.05f : 0.0f;
         for (int r = 0; r < 3; ++r) {
-            float sum = hasMaskingData ? gaussianSum[r] : 0.0f;
-            if (!std::isfinite(sum)) sum = 0.0f;
+            float maskStrength = hasMaskingData
+                ? ((1.0f - maskScaleCh[r]) + maskOffsetCh[r])
+                : 0.0f;
+            if (!std::isfinite(maskStrength)) maskStrength = 0.0f;
             float amountRow = dirCfg.hasData ? amountRGB[r] : 1.0f;
             if (!std::isfinite(amountRow) || amountRow < 0.0f) amountRow = 0.0f;
-            float scale = maskScaleBase * (sum + maskScaleOffset);
+            float scale = maskScaleBase * (maskStrength + maskScaleOffset);
             if (dirCfg.hasData) {
                 scale *= amountRow;
             }
