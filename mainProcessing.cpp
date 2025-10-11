@@ -872,10 +872,17 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
 
                 if (_wsReady && _ws) {
                     if (_printParams.bypass || !_printReady || !_prt) {
-                        Scanner::simulate_scanner(
-                            rgbIn, rgbOut,
-                            _scannerParams, _dirRT, *_ws,
-                            _exposureScale);
+                        if (_scannerParams.enabled) {
+                            Scanner::simulate_scanner(
+                                rgbIn, rgbOut,
+                                _scannerParams, _dirRT, *_ws,
+                                _exposureScale);
+                        }
+                        else {
+                            rgbOut[0] = rgbIn[0];
+                            rgbOut[1] = rgbIn[1];
+                            rgbOut[2] = rgbIn[2];
+                        }
                     }
                     else {
                         Print::simulate_print_pixel(
