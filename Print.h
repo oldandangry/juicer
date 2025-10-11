@@ -1266,7 +1266,15 @@ namespace Print {
                 }
 #endif
 
-        // 2) Negative transmittance with optional baseline blend        
+                Spectral::apply_masking_adjustments_with_params(ws.negParams, D_neg);
+                for (int i = 0; i < 3; ++i) {
+                    float v = D_neg[i];
+                    if (!std::isfinite(v) || v < 0.0f) v = 0.0f;
+                    if (v > 1000.0f) v = 1000.0f;
+                    D_neg[i] = v;
+                }
+
+                // 2) Negative transmittance with optional baseline blend      
         thread_local std::vector<float> Tneg, Ee_expose, Tprint, Ee_viewed;
         thread_local std::vector<float> Tpreflash, Ee_preflash;
         negative_T_from_dyes(ws, D_neg, Tneg);
