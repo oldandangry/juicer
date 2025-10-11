@@ -55,17 +55,18 @@ namespace JuicerProc {
     // Separable Gaussian kernel builder, aligning radius with SciPy's truncate=4 default and keeping a safety cap.
     static void buildGaussianKernel(float sigma, std::vector<float>& kernel) {
         kernel.clear();
-        if (!(std::isfinite(sigma)) || sigma <= 0.5f) {
+        if (!(std::isfinite(sigma)) || sigma <= 0.0f) {
             kernel.push_back(1.0f);
             return;
         }
 
         constexpr int kMaxRadius = 1024; // generous safety cap to avoid runaway allocation
-        const int radiusRaw = std::max(1, int(std::ceil(4.0f * sigma)));
+        const float sigmaClamped = std::max(sigma, 1.0e-3f); // avoid denorms/underflow while keeping blur minimal
+        const int radiusRaw = std::max(1, int(std::ceil(4.0f * sigmaClamped)));
         const int radius = std::min(radiusRaw, kMaxRadius);
 
         kernel.resize(size_t(2 * radius + 1));
-        const float s2 = sigma * sigma * 2.0f;
+        const float s2 = sigmaClamped * sigmaClamped * 2.0f;
         float wsum = 0.0f;
         for (int i = -radius; i <= radius; ++i) {
             float w = std::exp(-(i * i) / s2);
@@ -428,7 +429,7 @@ namespace JuicerProc {
         const bool useScanner = !printPathActive;
         const bool curvesReady = curve_ok(ws->densB) && curve_ok(ws->densG) && curve_ok(ws->densR);
         const bool doSpatial = printPathActive && dirRT.active && std::isfinite(dirRT.spatialSigmaPixels)
-            && dirRT.spatialSigmaPixels > 0.5f && curvesReady;
+            && dirRT.spatialSigmaPixels > 0.0f && curvesReady;
         float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
         float kMid_spectral = 1.0f;
         if (printPathActive) {
@@ -683,7 +684,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
 
     const int tileW = procWindow.x2 - procWindow.x1;
     const int tileH = procWindow.y2 - procWindow.y1;
-    const bool doSpatial = std::isfinite(_dirRT.spatialSigmaPixels) && (_dirRT.spatialSigmaPixels > 0.5f);
+    const bool doSpatial = std::isfinite(_dirRT.spatialSigmaPixels) && (_dirRT.spatialSigmaPixels > 0.0f);
 
     auto curvesReady = [&]()->bool {
         if (!_ws) return false;
