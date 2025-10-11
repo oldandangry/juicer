@@ -712,11 +712,14 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
             dirWorkspace);
 
         // Precompute spectral midgray factor once (AgX parity), constant across the tile.
+        const bool printActive = _printReady && _prt && !_printParams.bypass;
         const float exposureCompScale = _printParams.exposureCompensationEnabled
             ? _printParams.exposureCompensationScale
             : 1.0f;
         float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
-        const float kMid_spectral = Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale, midgrayScale);
+        const float kMid_spectral = printActive
+            ? Print::compute_exposure_factor_midgray(*_ws, *_prt, _printParams, exposureCompScale, midgrayScale)
+            : 0.0f;
 
         // Pass B
         for (int yy = 0; yy < tileH; ++yy) {
@@ -765,7 +768,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                     D_cmy[i] = v;
                 }
 
-                if (_printParams.bypass || !_printReady || !_prt) {
+                if (!printActive) {
                     const SpectralTables* tables = nullptr;
                     if (_ws->tablesScan.K > 0) {
                         tables = &_ws->tablesScan;
