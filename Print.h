@@ -35,6 +35,16 @@ namespace Print {
         return 1.0f - (1.0f - c) * a;
     }
 
+    inline void apply_masking_coupler_and_sanitize(const Spectral::NegativeCouplerParams& negParams, float D[3]) {
+        Spectral::apply_masking_adjustments_with_params(negParams, D);
+        for (int i = 0; i < 3; ++i) {
+            float v = D[i];
+            if (!std::isfinite(v) || v < 0.0f) v = 0.0f;
+            if (v > 1000.0f) v = 1000.0f;
+            D[i] = v;
+        }
+    }
+
     inline float compose_dichroic_amount(float neutralAmount, float deltaAmount) {
         const float neutral = std::isfinite(neutralAmount)
             ? std::clamp(neutralAmount, 0.0f, 1.0f)
@@ -915,6 +925,7 @@ namespace Print {
             Spectral::sample_density_at_logE(ws.densG, logE_clamped[1]),
             Spectral::sample_density_at_logE(ws.densR, logE_clamped[2]),
         };
+        apply_masking_coupler_and_sanitize(ws.negParams, D_neg);
 
         // 4) Negative transmittance (baseline applied per stock)        
         thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered;
@@ -1091,6 +1102,7 @@ namespace Print {
             Spectral::sample_density_at_logE(ws.densG, leG), // M from G-layer curve
             Spectral::sample_density_at_logE(ws.densR, leR)  // C from R-layer curve
         };
+        apply_masking_coupler_and_sanitize(ws.negParams, D_neg);
 
         // 2) Negative transmittance with per-stock baseline        
         thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
@@ -1223,8 +1235,6 @@ namespace Print {
             if (sExp != 1.0f) { E[0] *= sExp; E[1] *= sExp; E[2] *= sExp; }
         }
 
-
-
         float logE[3] = {
             std::log10(std::max(0.0f, E[0]) + 1e-10f) + ws.logEOffB,
             std::log10(std::max(0.0f, E[1]) + 1e-10f) + ws.logEOffG,
@@ -1245,36 +1255,32 @@ namespace Print {
             D_out[1] = Spectral::sample_density_at_logE(ws.densG, le[1]); // M
             D_out[2] = Spectral::sample_density_at_logE(ws.densR, le[2]); // C
             };
+        auto sample_masked = [&](const float le[3], float D_out[3]) {
+            sample_ws(le, D_out);
+            apply_masking_coupler_and_sanitize(ws.negParams, D_out);
+            };
 
         float D_neg[3];
         float logE_clamped[3] = {
             clamp_logE_to_curve(ws.densB, logE[0]),
             clamp_logE_to_curve(ws.densG, logE[1]),
             clamp_logE_to_curve(ws.densR, logE[2]),
-                };
-                sample_ws(logE_clamped, D_neg);
+        };
+        sample_masked(logE_clamped, D_neg);
 
 #ifdef JUICER_ENABLE_COUPLERS
-                // Always apply local DIR corrections when active (agx parity), even if curves were
-                // precorrected and the spatial diffusion sigma is zero.
-                if (dirRT.active) {
-                    Couplers::ApplyInputLogE io{ {logE[0], logE[1], logE[2]}, {D_neg[0], D_neg[1], D_neg[2]} };
-                    // Per-instance clamp variant: aligns clamp domain to the same curves we sample
-                    Couplers::apply_runtime_logE_with_curves(io, dirRT, ws.densB, ws.densG, ws.densR);
-                    float logE2_clamped[3] = { io.logE[0], io.logE[1], io.logE[2] };
-                    sample_ws(logE2_clamped, D_neg);
-                }
+        // Always apply local DIR corrections when active (agx parity), even if curves were
+        // precorrected and the spatial diffusion sigma is zero.
+        if (dirRT.active) {
+            Couplers::ApplyInputLogE io{ {logE[0], logE[1], logE[2]}, {D_neg[0], D_neg[1], D_neg[2]} };
+            // Per-instance clamp variant: aligns clamp domain to the same curves we sample
+            Couplers::apply_runtime_logE_with_curves(io, dirRT, ws.densB, ws.densG, ws.densR);
+            float logE2_clamped[3] = { io.logE[0], io.logE[1], io.logE[2] };
+            sample_masked(logE2_clamped, D_neg);
+        }
 #endif
 
-                Spectral::apply_masking_adjustments_with_params(ws.negParams, D_neg);
-                for (int i = 0; i < 3; ++i) {
-                    float v = D_neg[i];
-                    if (!std::isfinite(v) || v < 0.0f) v = 0.0f;
-                    if (v > 1000.0f) v = 1000.0f;
-                    D_neg[i] = v;
-                }
-
-                // 2) Negative transmittance with optional baseline blend      
+        // 2) Negative transmittance with optional baseline blend    
         thread_local std::vector<float> Tneg, Ee_expose, Tprint, Ee_viewed;
         thread_local std::vector<float> Tpreflash, Ee_preflash;
         negative_T_from_dyes(ws, D_neg, Tneg);

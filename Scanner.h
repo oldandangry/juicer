@@ -220,14 +220,14 @@ namespace Scanner {
             std::log10(std::max(0.0f, E[2]) + 1e-10f) + ws.logEOffR
         };        
 
-        // Densities from per-instance curves
+        // Densities from per-instance curves (run full masking transform before DIR math)
         float D_cmy[3];
         float logE_clamped[3] = {
             clamp_logE_to_curve(ws.densB, logE[0]),
             clamp_logE_to_curve(ws.densG, logE[1]),
             clamp_logE_to_curve(ws.densR, logE[2]),
         };
-        Spectral::apply_masking_adjustments_with_params(ws.negParams, D_cmy);
+        sample_densities_from_ws(ws, logE_clamped, D_cmy);
 
 #ifdef JUICER_ENABLE_COUPLERS
         // Always apply local DIR corrections when enabled (agx parity), even if the build precorrected
@@ -237,6 +237,7 @@ namespace Scanner {
             // Per-instance clamp variant: aligns clamp domain to the same curves we sample
             Couplers::apply_runtime_logE_with_curves(io, dirRT, ws.densB, ws.densG, ws.densR);
             float logE2_clamped[3] = { io.logE[0], io.logE[1], io.logE[2] };
+            sample_densities_from_ws(ws, logE2_clamped, D_cmy);
             Spectral::apply_masking_adjustments_with_params(ws.negParams, D_cmy);
         }
 #endif
