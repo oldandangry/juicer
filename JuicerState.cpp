@@ -231,6 +231,15 @@ bool load_film_stock_into_base(const std::string& stockDir, InstanceState& S) {
     S.base.densitometerType = sanitize_densitometer_type(profile.densitometer);
     S.base.densityMidNeutral = std::move(profile.densityMidNeutral);
     S.base.dirCouplers = profile.dirCouplers;
+    if (profile.dirCouplers.hasData && std::isfinite(profile.dirCouplers.diffusionSizeUm)) {
+        const float spatialSigmaUm = std::clamp(profile.dirCouplers.diffusionSizeUm, 0.0f, 50.0f);
+        S.couplerProfileSpatialSigmaMicrometers = static_cast<double>(spatialSigmaUm);
+        S.couplerProfileSpatialSigmaValid = true;
+    }
+    else {
+        S.couplerProfileSpatialSigmaMicrometers = 0.0;
+        S.couplerProfileSpatialSigmaValid = false;
+    }
     S.base.maskingCouplers = profile.maskingCouplers;
     JTRACE("STOCK", std::string("loaded agx profile json: ") + jsonKey);
     if (!dc_r.empty() && !dc_g.empty() && !dc_b.empty()) {
@@ -585,7 +594,11 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
     double effectiveRatioR = P.ratioR;
     double effectiveCouplersSigma = P.sigma;
     double effectiveCouplersHigh = P.high;
+    const bool spatialSigmaIsUiDefault = approx_equal(P.spatialSigmaMicrometers, kFactoryCouplersSpatialSigma);
     double effectiveSpatialSigma = P.spatialSigmaMicrometers;
+    if (spatialSigmaIsUiDefault && S.couplerProfileSpatialSigmaValid) {
+        effectiveSpatialSigma = S.couplerProfileSpatialSigmaMicrometers;
+    }
 
 #ifdef JUICER_ENABLE_COUPLERS
     if (dirCfg.hasData) {
@@ -619,9 +632,12 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
         }
         if (!S.couplerDirty.high && approx_equal(effectiveCouplersHigh, kFactoryCouplersHigh)) {
             effectiveCouplersHigh = sanitize_profile(dirCfg.highExposureShift, effectiveCouplersHigh, 0.0, 1.0);
-        }
-        if (!S.couplerDirty.spatialSigma && approx_equal(effectiveSpatialSigma, kFactoryCouplersSpatialSigma)) {
-            effectiveSpatialSigma = sanitize_profile(dirCfg.diffusionSizeUm, effectiveSpatialSigma, 0.0, 50.0);
+        }        
+        if (!S.couplerDirty.spatialSigma && spatialSigmaIsUiDefault) {
+            const double profileSpatialSigma = S.couplerProfileSpatialSigmaValid
+                ? S.couplerProfileSpatialSigmaMicrometers
+                : static_cast<double>(dirCfg.diffusionSizeUm);
+            effectiveSpatialSigma = sanitize_profile(static_cast<float>(profileSpatialSigma), effectiveSpatialSigma, 0.0, 50.0);
         }
     }
 #endif

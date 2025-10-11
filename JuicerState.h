@@ -124,6 +124,9 @@ struct InstanceState {
 
     CouplerDirtyFlags couplerDirty;
 
+    bool couplerProfileSpatialSigmaValid = false;
+    double couplerProfileSpatialSigmaMicrometers = 0.0;
+
     // Cache for DIR spatial sigma conversion (canonical project dimensions)
     std::atomic<bool> spatialSigmaCacheValid{ false };
     std::atomic<double> spatialSigmaCanonicalWidth{ 0.0 };

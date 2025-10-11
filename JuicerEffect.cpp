@@ -891,7 +891,10 @@ void JuicerEffect::applyCouplerProfileDefaults(ParamSnapshot& P) {
     }
 
     if (!_state->couplerDirty.spatialSigma) {
-        const double spatial = sanitize_range(dirCfg.diffusionSizeUm, P.spatialSigmaMicrometers, 0.0, 50.0);
+        const float profileSpatialSigma = _state->couplerProfileSpatialSigmaValid
+            ? static_cast<float>(_state->couplerProfileSpatialSigmaMicrometers)
+            : dirCfg.diffusionSizeUm;
+        const double spatial = sanitize_range(profileSpatialSigma, P.spatialSigmaMicrometers, 0.0, 50.0);
         if (_pCouplersSpatialSigma) {
             _pCouplersSpatialSigma->setValue(spatial);
         }
