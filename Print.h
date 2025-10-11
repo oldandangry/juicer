@@ -693,15 +693,23 @@ namespace Print {
                 if (!interp.build(x, y)) {
                     return;
                 }
+                const float edgeMin = interp.evaluate(xmin);
+                const float edgeMax = interp.evaluate(xmax);
+                const float normalizedMin = std::isfinite(edgeMin) ? (edgeMin * 0.01f) : 0.0f;
+                const float normalizedMax = std::isfinite(edgeMax) ? (edgeMax * 0.01f) : 0.0f;
                 for (int i = 0; i < Spectral::gShape.K; ++i) {
                     const float wl = Spectral::gShape.wavelengths[i];
-                    if (wl < xmin || wl > xmax) {
-                        // Parity: agx-emulsion zeroes samples outside the measured range so they contribute no light.
-                        dst.linear[(size_t)i] = 0.0f;
-                        continue;
+                    float normalized = 0.0f;
+                    if (wl < xmin) {
+                        normalized = normalizedMin;
                     }
-                    const float v = interp.evaluate(wl);
-                    const float normalized = std::isfinite(v) ? (v * 0.01f) : 0.0f;
+                    else if (wl > xmax) {
+                        normalized = normalizedMax;
+                    }
+                    else {
+                        const float v = interp.evaluate(wl);
+                        normalized = std::isfinite(v) ? (v * 0.01f) : 0.0f;
+                    }                    
                     dst.linear[(size_t)i] = normalized;
                 }
             };
