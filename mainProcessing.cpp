@@ -52,7 +52,7 @@ namespace JuicerProc {
         }
     }
 
-    // Separable Gaussian kernel builder, with radius cap for safety.
+    // Separable Gaussian kernel builder, aligning radius with SciPy's truncate=4 default and keeping a safety cap.
     static void buildGaussianKernel(float sigma, std::vector<float>& kernel) {
         kernel.clear();
         if (!(std::isfinite(sigma)) || sigma <= 0.5f) {
@@ -60,8 +60,9 @@ namespace JuicerProc {
             return;
         }
 
-        const int radiusRaw = std::max(1, int(std::ceil(3.0f * sigma)));
-        const int radius = std::min(radiusRaw, 75); // cap at 75 taps each side
+        constexpr int kMaxRadius = 1024; // generous safety cap to avoid runaway allocation
+        const int radiusRaw = std::max(1, int(std::ceil(4.0f * sigma)));
+        const int radius = std::min(radiusRaw, kMaxRadius);
 
         kernel.resize(size_t(2 * radius + 1));
         const float s2 = sigma * sigma * 2.0f;
