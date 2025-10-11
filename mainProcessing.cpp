@@ -375,9 +375,9 @@ namespace {
 
         auto scrubClamp = [](std::vector<float>& v) {
             for (float& t : v) {
-                if (!std::isfinite(t)) t = 0.0f;
-                if (t < -10.0f) t = -10.0f;
-                if (t > 10.0f) t = 10.0f;
+                if (!std::isfinite(t)) {
+                    t = 0.0f;
+                }
             }
             };
         scrubClamp(work.corrYBlur);
