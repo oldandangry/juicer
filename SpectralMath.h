@@ -679,11 +679,15 @@ namespace Spectral {
 
     // Build S = ∫ [max(0, CMF)]^T * [CMF] dλ and precompute its inverse once.
     // We’ll do it lazily the first time we need it.
-    inline bool gSPDInit = false;
+    inline std::atomic<bool> gSPDInit = false;
+    inline std::mutex gSPDMutex;
     inline float gS_inv[9]; // row-major inverse of 3x3 S
 
     inline void compute_S_inverse_once() {
-        if (gSPDInit) return;
+        if (gSPDInit.load(std::memory_order_acquire)) return;
+
+        std::lock_guard<std::mutex> lock(gSPDMutex);
+        if (gSPDInit.load(std::memory_order_acquire)) return;
 
         // Accumulate S over the fixed grid with Δλ = kDelta
         double Sxx = 0, Sxy = 0, Sxz = 0;
@@ -717,7 +721,7 @@ namespace Spectral {
             gS_inv[0] = 1; gS_inv[1] = 0; gS_inv[2] = 0;
             gS_inv[3] = 0; gS_inv[4] = 1; gS_inv[5] = 0;
             gS_inv[6] = 0; gS_inv[7] = 0; gS_inv[8] = 1;
-            gSPDInit = true;
+            gSPDInit.store(true, std::memory_order_release);
             return;
         }
 
@@ -742,7 +746,7 @@ namespace Spectral {
         gS_inv[7] = static_cast<float>(invSzy);
         gS_inv[8] = static_cast<float>(invSzz);
 
-        gSPDInit = true;
+        gSPDInit.store(true, std::memory_order_release);
     }
 
     inline void DWG_linear_to_XYZ(const float RGB[3], float XYZ[3]);
@@ -1142,12 +1146,12 @@ namespace Spectral {
             gAz[i] = Ee * z;
 
             Yn += gAy[i];
-
-            gSPDInit = false;
+            
         }
 
         gYnNorm = (Yn > 0.0f) ? Yn : 1.0f;
-        gInvYn = 1.0f / gYnNorm;        
+        gInvYn = 1.0f / gYnNorm;
+        gSPDInit.store(false, std::memory_order_release);
     }
 
     inline float baseline_density(float lambda, float w) {
