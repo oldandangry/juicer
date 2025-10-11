@@ -163,6 +163,109 @@ namespace {
         std::vector<float> tmp; // reused for separable blur scratch
     };
 
+    struct PrintPipelineScratch {
+        std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
+        std::vector<float> Tpreflash, Ee_preflash;
+    };
+
+    static bool run_print_pipeline_from_dir_corrected_densities(
+        const WorkingState& ws,
+        const Print::Runtime& prt,
+        const Print::Params& prm,
+        const float D_cmy[3],
+        float kMid_spectral,
+        const float midgrayScale[3],
+        float rgbOut[3])
+    {
+        const int K = std::min(ws.tablesView.K, ws.tablesPrint.K);
+        if (K <= 0) {
+            return false;
+        }
+
+        thread_local PrintPipelineScratch scratch;
+        auto& Tneg = scratch.Tneg;
+        auto& Ee_expose = scratch.Ee_expose;
+        auto& Ee_filtered = scratch.Ee_filtered;
+        auto& Tprint = scratch.Tprint;
+        auto& Ee_viewed = scratch.Ee_viewed;
+        auto& Tpreflash = scratch.Tpreflash;
+        auto& Ee_preflash = scratch.Ee_preflash;
+
+        Print::negative_T_from_dyes(ws, D_cmy, Tneg);
+        if (int(Tneg.size()) < K) {
+            Tneg.resize(size_t(K), 0.0f);
+        }
+
+        Ee_expose.resize(size_t(K));
+        for (int i = 0; i < K; ++i) {
+            const float Ee = (prt.illumEnlarger.linear.size() > size_t(i))
+                ? prt.illumEnlarger.linear[i]
+                : 1.0f;
+            Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
+        }
+
+        Ee_filtered.resize(size_t(K));
+        const float yAmount = Print::compose_dichroic_amount(prt.neutralY, prm.yFilter);
+        const float mAmount = Print::compose_dichroic_amount(prt.neutralM, prm.mFilter);
+        const float cAmount = Print::compose_dichroic_amount(prt.neutralC, 0.0f);
+        for (int i = 0; i < K; ++i) {
+            const float fY = Print::blend_dichroic_filter_linear(
+                (prt.filterY.linear.size() > size_t(i)) ? prt.filterY.linear[i] : 1.0f,
+                yAmount);
+            const float fM = Print::blend_dichroic_filter_linear(
+                (prt.filterM.linear.size() > size_t(i)) ? prt.filterM.linear[i] : 1.0f,
+                mAmount);
+            const float fC = Print::blend_dichroic_filter_linear(
+                (prt.filterC.linear.size() > size_t(i)) ? prt.filterC.linear[i] : 1.0f,
+                cAmount);
+            const float fTotal = fY * fM * fC;
+            Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
+        }
+
+        float raw[3];
+        Print::raw_exposures_from_filtered_light(prt.profile, Ee_filtered, raw);
+
+        const float expPrint = std::isfinite(prm.exposure)
+            ? std::max(0.0f, prm.exposure)
+            : 1.0f;
+        const float rawScale = expPrint * kMid_spectral;
+        raw[0] *= rawScale * midgrayScale[0];
+        raw[1] *= rawScale * midgrayScale[1];
+        raw[2] *= rawScale * midgrayScale[2];
+
+        if (std::isfinite(prm.preflashExposure) && prm.preflashExposure > 0.0f) {
+            float rawPre[3];
+            Print::compute_preflash_raw(prt, ws, Tpreflash, Ee_preflash, rawPre);
+            raw[0] += rawPre[0] * prm.preflashExposure * midgrayScale[0];
+            raw[1] += rawPre[1] * prm.preflashExposure * midgrayScale[1];
+            raw[2] += rawPre[2] * prm.preflashExposure * midgrayScale[2];
+        }
+
+        float D_print[3];
+        Print::print_densities_from_Eprint(prt.profile, raw, D_print);
+
+        Print::print_T_from_dyes(prt.profile, D_print, Tprint);
+        if (int(Tprint.size()) < K) {
+            Tprint.resize(size_t(K), 0.0f);
+        }
+
+        Ee_viewed.resize(size_t(K));
+        for (int i = 0; i < K; ++i) {
+            const float Ev = (prt.illumView.linear.size() > size_t(i))
+                ? prt.illumView.linear[i]
+                : 1.0f;
+            Ee_viewed[i] = std::max(0.0f, Ev * Tprint[i]);
+        }
+
+        float XYZ[3];
+        Spectral::Ee_to_XYZ_given_tables(ws.tablesPrint, Ee_viewed, XYZ);
+        Spectral::XYZ_to_DWG_linear_adapted(ws.tablesPrint, XYZ, rgbOut);
+        rgbOut[0] = std::max(0.0f, rgbOut[0]);
+        rgbOut[1] = std::max(0.0f, rgbOut[1]);
+        rgbOut[2] = std::max(0.0f, rgbOut[2]);
+        return true;
+    }
+
     template <typename FetchRGB, typename AbortCheck>
     void buildSpatialDIRCorrections(
         int width, int height,
@@ -478,82 +581,15 @@ namespace JuicerProc {
                         D_cmy[i] = v;
                     }
 
-                    thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
-                    thread_local std::vector<float> Tpreflash, Ee_preflash;
-
-                    Print::negative_T_from_dyes(*ws, D_cmy, Tneg);
-
-                    const int K = std::min(ws->tablesView.K, ws->tablesPrint.K);
-                    if (K > 0) {
-                        if (int(Tneg.size()) < K) Tneg.resize(size_t(K), 0.0f);
-
-                        Ee_expose.resize(size_t(K));
-                        for (int i = 0; i < K; ++i) {
-                            const float Ee = (prt->illumEnlarger.linear.size() > size_t(i))
-                                ? prt->illumEnlarger.linear[i]
-                                : 1.0f;
-                            Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
-                        }
-
-                        Ee_filtered.resize(size_t(K));
-                        const float yAmount = Print::compose_dichroic_amount(prt->neutralY, prm.yFilter);
-                        const float mAmount = Print::compose_dichroic_amount(prt->neutralM, prm.mFilter);
-                        const float cAmount = Print::compose_dichroic_amount(prt->neutralC, 0.0f);
-                        for (int i = 0; i < K; ++i) {
-                            const float fY = Print::blend_dichroic_filter_linear(
-                                (prt->filterY.linear.size() > size_t(i)) ? prt->filterY.linear[i] : 1.0f,
-                                yAmount);
-                            const float fM = Print::blend_dichroic_filter_linear(
-                                (prt->filterM.linear.size() > size_t(i)) ? prt->filterM.linear[i] : 1.0f,
-                                mAmount);
-                            const float fC = Print::blend_dichroic_filter_linear(
-                                (prt->filterC.linear.size() > size_t(i)) ? prt->filterC.linear[i] : 1.0f,
-                                cAmount);
-                            const float fTotal = fY * fM * fC;
-                            Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
-                        }
-
-                        float raw[3];
-                        Print::raw_exposures_from_filtered_light(
-                            prt->profile, Ee_filtered, raw);
-
-                        const float expPrint = std::isfinite(prm.exposure)
-                            ? std::max(0.0f, prm.exposure)
-                            : 1.0f;
-                        const float rawScale = expPrint * kMid_spectral;
-                        raw[0] *= rawScale * midgrayScale[0];
-                        raw[1] *= rawScale * midgrayScale[1];
-                        raw[2] *= rawScale * midgrayScale[2];
-
-                        if (std::isfinite(prm.preflashExposure) && prm.preflashExposure > 0.0f) {
-                            float rawPre[3];
-                            Print::compute_preflash_raw(*prt, *ws, Tpreflash, Ee_preflash, rawPre);
-                            raw[0] += rawPre[0] * prm.preflashExposure * midgrayScale[0];
-                            raw[1] += rawPre[1] * prm.preflashExposure * midgrayScale[1];
-                            raw[2] += rawPre[2] * prm.preflashExposure * midgrayScale[2];
-                        }
-
-                        float D_print[3];
-                        Print::print_densities_from_Eprint(prt->profile, raw, D_print);
-
-                        Print::print_T_from_dyes(prt->profile, D_print, Tprint);
-                        if (int(Tprint.size()) < K) Tprint.resize(size_t(K), 0.0f);
-
-                        Ee_viewed.resize(size_t(K));
-                        for (int i = 0; i < K; ++i) {
-                            const float Ev = (prt->illumView.linear.size() > size_t(i))
-                                ? prt->illumView.linear[i]
-                                : 1.0f;
-                            Ee_viewed[i] = std::max(0.0f, Ev * Tprint[i]);
-                        }
-                        float XYZ[3];
-                        Spectral::Ee_to_XYZ_given_tables(ws->tablesPrint, Ee_viewed, XYZ);
-                        Spectral::XYZ_to_DWG_linear_adapted(ws->tablesPrint, XYZ, rgbOut);
-                        rgbOut[0] = std::max(0.0f, rgbOut[0]);
-                        rgbOut[1] = std::max(0.0f, rgbOut[1]);
-                        rgbOut[2] = std::max(0.0f, rgbOut[2]);
-                    }
-                    else {
+                    if (!run_print_pipeline_from_dir_corrected_densities(
+                        *ws,
+                        *prt,
+                        prm,
+                        D_cmy,
+                        kMid_spectral,
+                        midgrayScale,
+                        rgbOut))
+                    {
                         // Fallback to non-spatial print simulation if tables are invalid.
                         Print::simulate_print_pixel(
                             rgbIn, prm,
@@ -770,15 +806,15 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                 }
                 else {
                     // Spatial DIR path must continue from D_cmy to preserve blurred corrections.
-                    thread_local std::vector<float> Tneg, Ee_expose, Ee_filtered, Tprint, Ee_viewed;
-                    thread_local std::vector<float> Tpreflash, Ee_preflash;
-
-                    // 1) Negative transmittance from corrected densities
-                    Print::negative_T_from_dyes(*_ws, D_cmy, Tneg);
-
-                    // Per-instance spectral shape to avoid global races and size mismatches
-                    const int K = std::min(_ws->tablesView.K, _ws->tablesPrint.K);
-                    if (K <= 0) {
+                    if (!run_print_pipeline_from_dir_corrected_densities(
+                        *_ws,
+                        *_prt,
+                        _printParams,
+                        D_cmy,
+                        kMid_spectral,
+                        midgrayScale,
+                        rgbOut))
+                    {
                         // Defensive early-out: cannot proceed with spectral integration
                         OutputEncoding::applyEncoding(_outputEncoding, rgbOut);
                         dstPix[0] = rgbOut[0];
@@ -786,83 +822,7 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                         dstPix[2] = rgbOut[2];
                         if (_nComponents == 4) dstPix[3] = srcPix[3];
                         continue; // NO pointer arithmetic
-                    }
-
-                    // Ensure Tneg length is at least K (pad if needed)
-                    if (int(Tneg.size()) < K) Tneg.resize(size_t(K), 0.0f);
-
-                    // 2) Enlarger illuminant exposure (no print exposure yet)
-                    Ee_expose.resize(size_t(K));
-                    for (int i = 0; i < K; ++i) {
-                        const float Ee = (_prt->illumEnlarger.linear.size() > size_t(i))
-                            ? _prt->illumEnlarger.linear[i]
-                            : 1.0f;
-                        Ee_expose[i] = std::max(0.0f, Ee * Tneg[i]);
-                    }
-
-                    // 3) Apply spectral dichroic filters with Y/M/C neutral values (agx density-as-OD)
-                    Ee_filtered.resize(size_t(K));
-                    const float yAmount = Print::compose_dichroic_amount(_prt->neutralY, _printParams.yFilter);
-                    const float mAmount = Print::compose_dichroic_amount(_prt->neutralM, _printParams.mFilter);
-                    const float cAmount = Print::compose_dichroic_amount(_prt->neutralC, 0.0f);
-                    for (int i = 0; i < K; ++i) {
-                        const float fY = Print::blend_dichroic_filter_linear(
-                            (_prt->filterY.linear.size() > size_t(i)) ? _prt->filterY.linear[i] : 1.0f,
-                            yAmount);
-                        const float fM = Print::blend_dichroic_filter_linear(
-                            (_prt->filterM.linear.size() > size_t(i)) ? _prt->filterM.linear[i] : 1.0f,
-                            mAmount);
-                        const float fC = Print::blend_dichroic_filter_linear(
-                            (_prt->filterC.linear.size() > size_t(i)) ? _prt->filterC.linear[i] : 1.0f,
-                            cAmount);
-                        const float fTotal = fY * fM * fC;
-                        Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
-                    }
-
-                    // 4) Contract to per-channel raw exposures using print paper sensitivities
-                    float raw[3];
-                    Print::raw_exposures_from_filtered_light(
-                        _prt->profile, Ee_filtered, raw);
-
-                    // 5) Apply print exposure ONCE (agx: raw *= exposure) + midgray compensation (vector)
-                    const float expPrint = std::isfinite(_printParams.exposure)
-                        ? std::max(0.0f, _printParams.exposure)
-                        : 1.0f;
-                    const float rawScale = expPrint * kMid_spectral;
-                    raw[0] *= rawScale * midgrayScale[0];
-                    raw[1] *= rawScale * midgrayScale[1];
-                    raw[2] *= rawScale * midgrayScale[2];
-
-                    if (std::isfinite(_printParams.preflashExposure) && _printParams.preflashExposure > 0.0f) {
-                        float rawPre[3];
-                        Print::compute_preflash_raw(*_prt, *_ws, Tpreflash, Ee_preflash, rawPre);
-                        raw[0] += rawPre[0] * _printParams.preflashExposure * midgrayScale[0];
-                        raw[1] += rawPre[1] * _printParams.preflashExposure * midgrayScale[1];
-                        raw[2] += rawPre[2] * _printParams.preflashExposure * midgrayScale[2];
-                    }
-
-                    // 6) Map to print densities via calibrated per-channel logE offsets and DC curves
-                    float D_print[3];
-                    Print::print_densities_from_Eprint(_prt->profile, raw, D_print);
-
-                    // 7) Print transmittance
-                    Print::print_T_from_dyes(_prt->profile, D_print, Tprint);
-                    if (int(Tprint.size()) < K) Tprint.resize(size_t(K), 0.0f);
-
-                    // 8) Viewing illuminant and integration to DWG
-                    Ee_viewed.resize(size_t(K));
-                    for (int i = 0; i < K; ++i) {
-                        const float Ev = (_prt->illumView.linear.size() > size_t(i))
-                            ? _prt->illumView.linear[i]
-                            : 1.0f;
-                        Ee_viewed[i] = std::max(0.0f, Ev * Tprint[i]);
-                    }
-                    float XYZ[3];
-                    Spectral::Ee_to_XYZ_given_tables(_ws->tablesPrint, Ee_viewed, XYZ);
-                    Spectral::XYZ_to_DWG_linear_adapted(_ws->tablesPrint, XYZ, rgbOut);
-                    rgbOut[0] = std::max(0.0f, rgbOut[0]);
-                    rgbOut[1] = std::max(0.0f, rgbOut[1]);
-                    rgbOut[2] = std::max(0.0f, rgbOut[2]);
+                    }                    
                 }
 
                 // Write out (no pointer increments)
