@@ -211,6 +211,28 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
     const int fullWidth = fullBounds.x2 - fullBounds.x1;
     const int fullHeight = fullBounds.y2 - fullBounds.y1;
 
+    // Ensure bootstrap has run before we rely on parameter state
+    if (_state && !_state->baseLoaded) {
+        if (!_state->inBootstrap) {
+            struct SuppressGuard {
+                InstanceState* state;
+                bool previous;
+                explicit SuppressGuard(InstanceState* s)
+                    : state(s), previous(s ? s->suppressParamEvents : false) {
+                    if (state) {
+                        state->suppressParamEvents = true;
+                    }
+                }
+                ~SuppressGuard() {
+                    if (state) {
+                        state->suppressParamEvents = previous;
+                    }
+                }
+            } guard(_state.get());
+            bootstrap_after_attach();
+        }
+    }
+
     // Parameter reads
     double exposureSliderEV = 0.0;
     if (_pExposure) _pExposure->getValue(exposureSliderEV);
