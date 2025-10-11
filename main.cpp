@@ -135,7 +135,7 @@ void JuicerPluginFactory::describeInContext(OFX::ImageEffectDescriptor& desc, OF
     {
         OFX::BooleanParamDescriptor* p = desc.defineBooleanParam("UnmixDensities");
         p->setLabel("Unmix densities");
-        p->setDefault(true);
+        p->setDefault(false);
     }
 
 #ifdef JUICER_ENABLE_COUPLERS
