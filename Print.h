@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <tuple>
 #include <cmath>
 #include "SpectralTables.h"
 #include "SpectralMath.h"
@@ -29,10 +30,25 @@ namespace Print {
     constexpr float kDefaultNeutralM = 0.5f;
     constexpr float kDefaultNeutralC = 0.35f;
 
+    inline float sanitize_dichroic_sample(float v) {
+        if (!std::isfinite(v)) {
+            return 1.0f;
+        }
+        return std::clamp(v, 0.0f, 1.0f);
+    }
+
+    inline float sample_dichroic_curve(const Spectral::Curve& curve, size_t idx) {
+        if (curve.linear.empty() || idx >= curve.linear.size()) {
+            return 1.0f;
+        }
+        return sanitize_dichroic_sample(curve.linear[idx]);
+    }
+
     inline float blend_dichroic_filter_linear(float curveVal, float normalizedAmount) {
-        const float c = std::isfinite(curveVal) ? curveVal : 1.0f;
+        const float c = sanitize_dichroic_sample(curveVal);
         const float a = std::isfinite(normalizedAmount) ? normalizedAmount : 0.0f;
-        return 1.0f - (1.0f - c) * a;
+        const float blended = 1.0f - (1.0f - c) * a;
+        return std::clamp(blended, 0.0f, 1.0f);
     }
 
     inline void apply_masking_coupler_and_sanitize(const Spectral::NegativeCouplerParams& negParams, float D[3]) {
@@ -695,8 +711,8 @@ namespace Print {
                 }
                 const float edgeMin = interp.evaluate(xmin);
                 const float edgeMax = interp.evaluate(xmax);
-                const float normalizedMin = std::isfinite(edgeMin) ? (edgeMin * 0.01f) : 0.0f;
-                const float normalizedMax = std::isfinite(edgeMax) ? (edgeMax * 0.01f) : 0.0f;
+                const float normalizedMin = sanitize_dichroic_sample(std::isfinite(edgeMin) ? (edgeMin * 0.01f) : 0.0f);
+                const float normalizedMax = sanitize_dichroic_sample(std::isfinite(edgeMax) ? (edgeMax * 0.01f) : 0.0f);
                 for (int i = 0; i < Spectral::gShape.K; ++i) {
                     const float wl = Spectral::gShape.wavelengths[i];
                     float normalized = 0.0f;
@@ -708,9 +724,9 @@ namespace Print {
                     }
                     else {
                         const float v = interp.evaluate(wl);
-                        normalized = std::isfinite(v) ? (v * 0.01f) : 0.0f;
-                    }                    
-                    dst.linear[(size_t)i] = normalized;
+                        normalized = sanitize_dichroic_sample(std::isfinite(v) ? (v * 0.01f) : 0.0f);
+                    }
+                    dst.linear[(size_t)i] = sanitize_dichroic_sample(normalized);
                 }
             };
 
@@ -721,11 +737,28 @@ namespace Print {
         // Diagnostics
         {
             std::ostringstream oss;
+            auto summarize_range = [](const Spectral::Curve& c) {
+                if (c.linear.empty()) {
+                    return std::tuple<float, float, bool>(-1.0f, -1.0f, true);
+                }
+                float minVal = 1.0f;
+                float maxVal = 0.0f;
+                for (float v : c.linear) {
+                    const float s = sanitize_dichroic_sample(v);
+                    minVal = std::min(minVal, s);
+                    maxVal = std::max(maxVal, s);
+                }
+                return std::tuple<float, float, bool>(minVal, maxVal, false);
+                };
+
+            const auto [yMin, yMax, yEmpty] = summarize_range(rt.filterY);
+            const auto [mMin, mMax, mEmpty] = summarize_range(rt.filterM);
+            const auto [cMin, cMax, cEmpty] = summarize_range(rt.filterC);
+
             oss << "DICHROICS loaded K=" << Spectral::gShape.K
-                << " Y/M/C first="
-                << (rt.filterY.linear.empty() ? -1.0f : rt.filterY.linear.front()) << "/"
-                << (rt.filterM.linear.empty() ? -1.0f : rt.filterM.linear.front()) << "/"
-                << (rt.filterC.linear.empty() ? -1.0f : rt.filterC.linear.front());
+                << " Y range=" << (yEmpty ? -1.0f : yMin) << "-" << (yEmpty ? -1.0f : yMax)
+                << " M range=" << (mEmpty ? -1.0f : mMin) << "-" << (mEmpty ? -1.0f : mMax)
+                << " C range=" << (cEmpty ? -1.0f : cMin) << "-" << (cEmpty ? -1.0f : cMax);
             JuicerTrace::write("PRINT", oss.str());
         }
     }
@@ -863,9 +896,9 @@ namespace Print {
                 ? rt.illumEnlarger.linear[i]
                 : 1.0f;
             const float t = Tpre[i];
-            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
-            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
-            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], cAmount);
+            const float fY = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterY, (size_t)i), yAmount);
+            const float fM = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterM, (size_t)i), mAmount);
+            const float fC = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterC, (size_t)i), cAmount);
             const float fTotal = fY * fM * fC;
             Ee_pre[i] = std::max(0.0f, Ee * t * fTotal);
         }
@@ -952,9 +985,9 @@ namespace Print {
         const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
         const float cAmount = compose_dichroic_amount(rt.neutralC, 0.0f);
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
-            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
-            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], cAmount);
+            const float fY = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterY, (size_t)i), yAmount);
+            const float fM = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterM, (size_t)i), mAmount);
+            const float fC = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterC, (size_t)i), cAmount);
             const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
@@ -1130,9 +1163,9 @@ namespace Print {
         const float mAmount = compose_dichroic_amount(rt.neutralM, prm.mFilter);
         const float cAmount = compose_dichroic_amount(rt.neutralC, 0.0f);
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
-            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
-            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], cAmount);
+            const float fY = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterY, (size_t)i), yAmount);
+            const float fM = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterM, (size_t)i), mAmount);
+            const float fC = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterC, (size_t)i), cAmount);
             const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
@@ -1309,9 +1342,9 @@ namespace Print {
         const float cAmount = compose_dichroic_amount(rt.neutralC, 0.0f);
         // Blend each wheel between identity (1.0) and its full transmittance curve
         for (int i = 0; i < Spectral::gShape.K; ++i) {
-            const float fY = blend_dichroic_filter_linear(rt.filterY.linear.empty() ? 1.0f : rt.filterY.linear[i], yAmount);
-            const float fM = blend_dichroic_filter_linear(rt.filterM.linear.empty() ? 1.0f : rt.filterM.linear[i], mAmount);
-            const float fC = blend_dichroic_filter_linear(rt.filterC.linear.empty() ? 1.0f : rt.filterC.linear[i], cAmount);
+            const float fY = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterY, (size_t)i), yAmount);
+            const float fM = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterM, (size_t)i), mAmount);
+            const float fC = blend_dichroic_filter_linear(sample_dichroic_curve(rt.filterC, (size_t)i), cAmount);
             const float fTotal = fY * fM * fC;
             Ee_filtered[i] = std::max(0.0f, Ee_expose[i] * fTotal);
         }
