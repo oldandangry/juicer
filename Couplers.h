@@ -433,6 +433,9 @@ namespace Couplers {
         float dMax[3] = { 1.0f, 1.0f, 1.0f };
         float spatialSigmaMicrometers = 0.0f;
         float spatialSigmaPixels = 0.0f; // 0 = disabled, later used for optional xy Gaussian
+        float spatialSigmaCanonicalPixels = 0.0f;
+        float spatialSigmaCanonicalWidth = 0.0f;
+        float spatialSigmaCanonicalHeight = 0.0f;
     };
 
 
@@ -493,6 +496,9 @@ namespace Couplers {
         // Spatial sigma (micrometers from UI; convert to pixels using film long edge)
         rt.spatialSigmaMicrometers = fpos(spatial, /*max*/ 50.0f);
         rt.spatialSigmaPixels = 0.0f;
+        rt.spatialSigmaCanonicalPixels = 0.0f;
+        rt.spatialSigmaCanonicalWidth = 0.0f;
+        rt.spatialSigmaCanonicalHeight = 0.0f;
         if (rt.spatialSigmaMicrometers > 0.0f) {
             double widthPixels = 0.0, heightPixels = 0.0;
             if (effectSuite && propSuite) {
@@ -525,11 +531,15 @@ namespace Couplers {
                     (std::isfinite(filmLongEdgeMm) && filmLongEdgeMm > 0.0)
                     ? filmLongEdgeMm
                     : 36.0;
-                rt.spatialSigmaPixels = spatial_sigma_pixels_from_micrometers(
+                rt.spatialSigmaCanonicalWidth = static_cast<float>(widthPixels);
+                rt.spatialSigmaCanonicalHeight = static_cast<float>(heightPixels);
+                const float sigmaPix = spatial_sigma_pixels_from_micrometers(
                     rt.spatialSigmaMicrometers,
                     filmEdge,
                     widthPixels,
                     heightPixels);
+                rt.spatialSigmaPixels = sigmaPix;
+                rt.spatialSigmaCanonicalPixels = sigmaPix;
             }
         }
 

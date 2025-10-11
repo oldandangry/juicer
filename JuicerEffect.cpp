@@ -554,6 +554,10 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
             if (!(std::isfinite(renderScaleFactor)) || renderScaleFactor <= 0.0) {
                 renderScaleFactor = 1.0;
             }
+            dirRT.spatialSigmaCanonicalPixels = canonicalSigmaPixels;
+            dirRT.spatialSigmaCanonicalWidth = static_cast<float>(canonicalWidth);
+            dirRT.spatialSigmaCanonicalHeight = static_cast<float>(canonicalHeight);
+
             float scaledSigma = canonicalSigmaPixels * static_cast<float>(renderScaleFactor);
             if (!std::isfinite(scaledSigma) || scaledSigma < 0.0f) scaledSigma = 0.0f;
             if (scaledSigma > 25.0f) scaledSigma = 25.0f;
@@ -561,6 +565,9 @@ void JuicerEffect::render(const OFX::RenderArguments& args) {
         }
         else {
             dirRT.spatialSigmaPixels = 0.0f;
+            dirRT.spatialSigmaCanonicalPixels = 0.0f;
+            dirRT.spatialSigmaCanonicalWidth = 0.0f;
+            dirRT.spatialSigmaCanonicalHeight = 0.0f;
         }
     }
 #else

@@ -20,6 +20,9 @@ namespace RebuildWorkingState {
         if (a.highShift != b.highShift) return false;
         if (a.spatialSigmaMicrometers != b.spatialSigmaMicrometers) return false;
         if (a.spatialSigmaPixels != b.spatialSigmaPixels) return false;
+        if (a.spatialSigmaCanonicalPixels != b.spatialSigmaCanonicalPixels) return false;
+        if (a.spatialSigmaCanonicalWidth != b.spatialSigmaCanonicalWidth) return false;
+        if (a.spatialSigmaCanonicalHeight != b.spatialSigmaCanonicalHeight) return false;
         for (int r = 0; r < 3; ++r) {
             for (int c = 0; c < 3; ++c) {
                 if (a.M[r][c] != b.M[r][c]) {

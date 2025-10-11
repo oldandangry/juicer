@@ -428,8 +428,37 @@ namespace JuicerProc {
         const bool printPathActive = printReady && !prm.bypass;
         const bool useScanner = !printPathActive;
         const bool curvesReady = curve_ok(ws->densB) && curve_ok(ws->densG) && curve_ok(ws->densR);
-        const bool doSpatial = printPathActive && dirRT.active && std::isfinite(dirRT.spatialSigmaPixels)
+        auto validPositive = [](float v) -> bool {
+            return std::isfinite(v) && v > 0.0f;
+            };
+        bool doSpatial = printPathActive && dirRT.active && std::isfinite(dirRT.spatialSigmaPixels)
             && dirRT.spatialSigmaPixels > 0.0f && curvesReady;
+        float previewSigmaPixels = dirRT.spatialSigmaPixels;
+        if (doSpatial) {
+            float baseSigma = dirRT.spatialSigmaCanonicalPixels;
+            if (!validPositive(baseSigma)) {
+                baseSigma = dirRT.spatialSigmaPixels;
+            }
+
+            float scaleFactor = 1.0f;
+            if (validPositive(dirRT.spatialSigmaCanonicalWidth) && validPositive(dirRT.spatialSigmaCanonicalHeight)) {
+                const float sx = static_cast<float>(outW) / dirRT.spatialSigmaCanonicalWidth;
+                const float sy = static_cast<float>(outH) / dirRT.spatialSigmaCanonicalHeight;
+                const float s = std::max(sx, sy);
+                if (std::isfinite(s) && s > 0.0f) {
+                    scaleFactor = s;
+                }
+            }
+
+            float scaledSigma = baseSigma * scaleFactor;
+            if (!std::isfinite(scaledSigma) || scaledSigma <= 0.0f) {
+                doSpatial = false;
+            }
+            else {
+                if (scaledSigma > 25.0f) scaledSigma = 25.0f;
+                previewSigmaPixels = scaledSigma;
+            }
+        }
         float midgrayScale[3] = { 1.0f, 1.0f, 1.0f };
         float kMid_spectral = 1.0f;
         if (printPathActive) {
@@ -529,10 +558,12 @@ namespace JuicerProc {
                 return true;
                 };
             auto abortNever = []() -> bool { return false; };
+            Couplers::Runtime previewDirRT = dirRT;
+            previewDirRT.spatialSigmaPixels = previewSigmaPixels;
             buildSpatialDIRCorrections(
                 outW, outH,
                 *ws,
-                dirRT,
+                previewDirRT,
                 exposureScale,
                 fetchSample,
                 abortNever,

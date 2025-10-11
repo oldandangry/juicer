@@ -709,6 +709,9 @@ void rebuild_working_state(OfxImageEffectHandle instance, InstanceState& S, cons
         dirRT.highShift = static_cast<float>(effectiveCouplersHigh);
         dirRT.spatialSigmaMicrometers = static_cast<float>(effectiveSpatialSigma);
         dirRT.spatialSigmaPixels = 0.0f;
+        dirRT.spatialSigmaCanonicalPixels = 0.0f;
+        dirRT.spatialSigmaCanonicalWidth = 0.0f;
+        dirRT.spatialSigmaCanonicalHeight = 0.0f;
 
         if (dirRT.active && P.couplersPrecorrect) {
             Spectral::Curve densB_corr, densG_corr, densR_corr;
