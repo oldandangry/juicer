@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 #include "SpectralTables.h"
@@ -135,6 +136,7 @@ namespace Scanner {
 
         float Dref[3];
         sample_densities_from_ws(ws, logERefClamped, Dref);
+        Spectral::apply_masking_adjustments_with_params(ws.negParams, Dref);
 
         float XYZref[3] = { 0.0f, 0.0f, 0.0f };
         if (ws.hasBaseline && tables.hasBaseline) {
@@ -158,6 +160,7 @@ namespace Scanner {
             const float maxGain = 32.0f;
             if (autoGain < minGain) autoGain = minGain;
             if (autoGain > maxGain) autoGain = maxGain;
+            assert(autoGain >= minGain && autoGain <= maxGain);
         }
 
         cache.ws = &ws;
