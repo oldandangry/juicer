@@ -517,7 +517,10 @@ namespace JuicerProc {
                         Print::raw_exposures_from_filtered_light(
                             prt->profile, Ee_filtered, raw);
 
-                        const float rawScale = prm.exposure * kMid_spectral;
+                        const float expPrint = std::isfinite(prm.exposure)
+                            ? std::max(0.0f, prm.exposure)
+                            : 1.0f;
+                        const float rawScale = expPrint * kMid_spectral;
                         raw[0] *= rawScale * midgrayScale[0];
                         raw[1] *= rawScale * midgrayScale[1];
                         raw[2] *= rawScale * midgrayScale[2];
@@ -822,7 +825,10 @@ void JuicerProcessor::multiThreadProcessImages(OfxRectI procWindow) {
                         _prt->profile, Ee_filtered, raw);
 
                     // 5) Apply print exposure ONCE (agx: raw *= exposure) + midgray compensation (vector)
-                    const float rawScale = _printParams.exposure * kMid_spectral;
+                    const float expPrint = std::isfinite(_printParams.exposure)
+                        ? std::max(0.0f, _printParams.exposure)
+                        : 1.0f;
+                    const float rawScale = expPrint * kMid_spectral;
                     raw[0] *= rawScale * midgrayScale[0];
                     raw[1] *= rawScale * midgrayScale[1];
                     raw[2] *= rawScale * midgrayScale[2];
