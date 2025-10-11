@@ -1837,6 +1837,7 @@ namespace Spectral {
     // Masking coupler matrix
     // -------------------------------------------------------------------------
     inline void apply_masking_adjustments_with_params(const NegativeCouplerParams& negParams, float D[3]) {
+        float sanitizedD[3];
         for (int i = 0; i < 3; ++i) {
             float scale = (i < 3) ? negParams.maskScale[i] : 1.0f;
             if (!std::isfinite(scale) || scale <= 0.0f) {
@@ -1850,6 +1851,20 @@ namespace Spectral {
             if (!std::isfinite(v) || v < 0.0f) {
                 v = 0.0f;
             }
+            sanitizedD[i] = v;
+        }
+
+        const float* M = negParams.mask;
+        float mixed[3];
+        mixed[0] = M[0] * sanitizedD[0] + M[1] * sanitizedD[1] + M[2] * sanitizedD[2] + negParams.baseY;
+        mixed[1] = M[3] * sanitizedD[0] + M[4] * sanitizedD[1] + M[5] * sanitizedD[2] + negParams.baseM;
+        mixed[2] = M[6] * sanitizedD[0] + M[7] * sanitizedD[1] + M[8] * sanitizedD[2] + negParams.baseC;
+
+        for (int i = 0; i < 3; ++i) {
+            float v = mixed[i];
+            if (!std::isfinite(v) || v < 0.0f) {
+                v = 0.0f;
+            }
             D[i] = v;
         }
     }
@@ -1857,20 +1872,7 @@ namespace Spectral {
     inline void apply_masking_adjustments(float D[3]) {
         const NegativeCouplerParams negParams = get_neg_params();
         apply_masking_adjustments_with_params(negParams, D);
-    }
-
-    inline void applyMaskingCoupler(const float E[3], float D[3]) {
-        const NegativeCouplerParams negParams = get_neg_params();
-        exposures_to_dyes_with_params(E, D, negParams);
-        apply_masking_adjustments_with_params(negParams, D);
-        const float* M = negParams.mask;
-        const float y = M[0] * D[0] + M[1] * D[1] + M[2] * D[2] + negParams.baseY;
-        const float m = M[3] * D[0] + M[4] * D[1] + M[5] * D[2] + negParams.baseM;
-        const float c = M[6] * D[0] + M[7] * D[1] + M[8] * D[2] + negParams.baseC;
-        D[0] = std::max(0.0f, y);
-        D[1] = std::max(0.0f, m);
-        D[2] = std::max(0.0f, c);
-    }
+    }   
 
 
     inline void dyes_to_XYZ_given_Ee(const float* dyes, float XYZ[3]) {
